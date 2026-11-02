@@ -298,9 +298,34 @@ export const isOfficialParticipant = (participantId, name = '', email = '') => {
   return false;
 };
 
+export const isTesterParticipant = (participantId, name = '', email = '') => {
+  if (participantId) {
+    const match = String(participantId).trim().toUpperCase().match(/^TRIAL(\d{1,3})$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num >= 1 && num <= 50) return true;
+    }
+  }
+  if (email) {
+    const match = String(email).trim().toLowerCase().match(/^trial(\d{1,3})@/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num >= 1 && num <= 50) return true;
+    }
+  }
+  if (name) {
+    const match = String(name).trim().toUpperCase().match(/TRIAL(\d{1,3})/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num >= 1 && num <= 50) return true;
+    }
+  }
+  return false;
+};
+
 // ─── LEADERBOARD ─────────────────────────────────────────────────────────────
 export const getLeaderboard = async () => {
-  // Fetch profiles, stocks, holdings, savings, commodities, mutual funds
+  // Fetch all profiles, stocks, holdings, savings, commodities, mutual funds
   const [
     profilesRes,
     stocksRes,
@@ -311,7 +336,7 @@ export const getLeaderboard = async () => {
     mfRes,
     mfHoldingsRes,
   ] = await Promise.all([
-    supabase.from('profiles').select('*').neq('role', 'admin'),
+    supabase.from('profiles').select('*'),
     supabase.from('stocks').select('ticker, current_price'),
     supabase.from('holdings').select('*').gt('quantity', 0),
     supabase.from('savings').select('*').in('status', ['active', 'matured']),
@@ -322,8 +347,6 @@ export const getLeaderboard = async () => {
   ]);
 
   const allProfiles = profilesRes.data || [];
-  // Strictly filter: ONLY official participant accounts (MUDRA001 to MUDRA200) appear on the leaderboard
-  const profiles = allProfiles.filter((p) => isOfficialParticipant(p.participant_id, p.name, p.email));
   const stocks = stocksRes.data || [];
   const holdings = holdingsRes.data || [];
   const savings = savingsRes.data || [];
@@ -356,7 +379,6 @@ export const getLeaderboard = async () => {
 
   const savingsByUser = {};
   savings.forEach((s) => {
-    // Principal locked
     savingsByUser[s.user_id] = (savingsByUser[s.user_id] || 0) + Number(s.amount);
   });
 
@@ -372,7 +394,7 @@ export const getLeaderboard = async () => {
     mfByUser[mh.user_id] = (mfByUser[mh.user_id] || 0) + val;
   });
 
-  const board = profiles.map((p) => {
+  const board = allProfiles.map((p) => {
     const cash = Number(p.cash || 0);
     const sVal = stockHoldingsByUser[p.id] || 0;
     const savVal = savingsByUser[p.id] || 0;
@@ -381,10 +403,21 @@ export const getLeaderboard = async () => {
     const otherAssets = savVal + cVal + mVal;
     const total = cash + sVal + otherAssets;
 
+    const isOfficial = isOfficialParticipant(p.participant_id, p.name, p.email);
+    const isTester = isTesterParticipant(p.participant_id, p.name, p.email);
+    const isAdmin = p.role === 'admin';
+    const userType = isAdmin ? 'admin' : isTester ? 'tester' : isOfficial ? 'participant' : 'other';
+
     return {
       uid: p.id,
       name: p.name,
+      email: p.email,
       participantId: p.participant_id,
+      role: p.role,
+      userType,
+      isOfficial,
+      isTester,
+      isAdmin,
       cash,
       holdingsValue: sVal,
       savingsValue: savVal,
@@ -396,7 +429,209 @@ export const getLeaderboard = async () => {
   });
 
   board.sort((a, b) => b.totalValue - a.totalValue);
-  return board.map((item, idx) => ({ ...item, rank: idx + 1 }));
+
+  // Compute overall rank and dedicated official participant rank
+  let officialCounter = 1;
+  return board.map((item, idx) => {
+    const rank = idx + 1;
+    const officialRank = item.isOfficial ? officialCounter++ : null;
+    return { ...item, rank, officialRank };
+  });
+};
+
+// ─── USER PROFILE & ADMIN INSPECTION APIS ────────────────────────────────────
+export const updateUserName = async (userId, newName) => {
+  const cleanName = String(newName || '').trim();
+  if (!cleanName) throw new Error('Name cannot be empty.');
+  if (cleanName.length < 2) throw new Error('Name must be at least 2 characters.');
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ name: cleanName, updated_at: new Date().toISOString() })
+    .eq('id', userId);
+
+  if (error) throw error;
+
+  try {
+    await supabase.auth.updateUser({
+      data: { name: cleanName },
+    });
+  } catch {
+    // Non-fatal if auth metadata update fails
+  }
+
+  return cleanName;
+};
+
+export const getUserTradeHistory = async (userId) => {
+  const { data, error } = await supabase
+    .from('trades')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  if (error) return [];
+  return data;
+};
+
+export const getUserDetailedPortfolio = async (userId) => {
+  const [
+    profileRes,
+    holdingsRes,
+    stocksRes,
+    savingsRes,
+    commoditiesRes,
+    comHoldingsRes,
+    mutualFundsRes,
+    mfHoldingsRes,
+    tradesRes,
+  ] = await Promise.all([
+    supabase.from('profiles').select('*').eq('id', userId).single(),
+    supabase.from('holdings').select('*').eq('user_id', userId).gt('quantity', 0),
+    supabase.from('stocks').select('*'),
+    supabase.from('savings').select('*').eq('user_id', userId),
+    supabase.from('commodities').select('*'),
+    supabase.from('commodity_holdings').select('*').eq('user_id', userId).gt('quantity', 0),
+    supabase.from('mutual_funds').select('*'),
+    supabase.from('mf_holdings').select('*').eq('user_id', userId).gt('units', 0),
+    supabase.from('trades').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(100),
+  ]);
+
+  const profile = profileRes.data || {};
+  const stocks = stocksRes.data || [];
+  const stockMap = {};
+  stocks.forEach((s) => {
+    stockMap[s.ticker] = s;
+  });
+
+  const rawHoldings = holdingsRes.data || [];
+  const stockHoldings = rawHoldings.map((h) => {
+    const stock = stockMap[h.ticker];
+    const currentPrice = Number(stock?.current_price || 0);
+    const quantity = Number(h.quantity || 0);
+    const avgPrice = Number(h.avg_price || 0);
+    const currentValue = currentPrice * quantity;
+    const costBasis = avgPrice * quantity;
+    const pnl = currentValue - costBasis;
+    const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+    return {
+      ticker: h.ticker,
+      name: stock?.name || h.ticker,
+      quantity,
+      avgPrice,
+      currentPrice,
+      currentValue,
+      costBasis,
+      pnl,
+      pnlPct,
+    };
+  });
+
+  const commodities = commoditiesRes.data || [];
+  const comMap = {};
+  commodities.forEach((c) => {
+    comMap[c.symbol] = c;
+  });
+
+  const rawComHoldings = comHoldingsRes.data || [];
+  const commodityHoldings = rawComHoldings.map((ch) => {
+    const com = comMap[ch.symbol];
+    const currentPrice = Number(com?.current_price || 0);
+    const quantity = Number(ch.quantity || 0);
+    const avgPrice = Number(ch.avg_buy_price || 0);
+    const currentValue = currentPrice * quantity;
+    const costBasis = avgPrice * quantity;
+    const pnl = currentValue - costBasis;
+    return {
+      symbol: ch.symbol,
+      name: com?.name || ch.symbol,
+      unit: com?.unit || 'g',
+      quantity,
+      avgPrice,
+      currentPrice,
+      currentValue,
+      costBasis,
+      pnl,
+    };
+  });
+
+  const mutualFunds = mutualFundsRes.data || [];
+  const mfMap = {};
+  mutualFunds.forEach((m) => {
+    mfMap[m.id] = m;
+  });
+
+  const rawMfHoldings = mfHoldingsRes.data || [];
+  const mutualFundHoldings = rawMfHoldings.map((mh) => {
+    const fund = mfMap[mh.fund_id];
+    const nav = Number(fund?.nav || 0);
+    const units = Number(mh.units || 0);
+    const avgNav = Number(mh.avg_nav || 0);
+    const currentValue = nav * units;
+    const costBasis = avgNav * units;
+    const pnl = currentValue - costBasis;
+    return {
+      fundId: mh.fund_id,
+      name: fund?.name || mh.fund_id,
+      category: fund?.category || 'Equity',
+      units,
+      avgNav,
+      currentNav: nav,
+      currentValue,
+      costBasis,
+      pnl,
+    };
+  });
+
+  const savings = (savingsRes.data || []).map((s) => ({
+    id: s.id,
+    type: s.type,
+    amount: Number(s.amount || 0),
+    interestRate: Number(s.interest_rate || 0),
+    termMonths: Number(s.term_months || 0),
+    startDate: s.start_date,
+    maturityDate: s.maturity_date,
+    status: s.status,
+    totalAtMaturity: Number(s.total_at_maturity || s.amount || 0),
+  }));
+
+  const cash = Number(profile.cash || 0);
+  const totalStocks = stockHoldings.reduce((sum, h) => sum + h.currentValue, 0);
+  const totalSavings = savings.reduce((sum, s) => sum + s.amount, 0);
+  const totalCommodities = commodityHoldings.reduce((sum, c) => sum + c.currentValue, 0);
+  const totalMFs = mutualFundHoldings.reduce((sum, m) => sum + m.currentValue, 0);
+  const totalNetWorth = cash + totalStocks + totalSavings + totalCommodities + totalMFs;
+  const initialCapital = profile.role === 'admin' ? 99900000000 : 200000;
+  const netPnl = totalNetWorth - initialCapital;
+
+  return {
+    profile: {
+      id: profile.id,
+      name: profile.name,
+      email: profile.email,
+      participantId: profile.participant_id,
+      role: profile.role,
+      createdAt: profile.created_at,
+    },
+    valuation: {
+      cash,
+      totalStocks,
+      totalSavings,
+      totalCommodities,
+      totalMFs,
+      totalNetWorth,
+      netPnl,
+      netPnlPct: initialCapital > 0 ? (netPnl / initialCapital) * 100 : 0,
+    },
+    holdings: {
+      stocks: stockHoldings,
+      savings,
+      commodities: commodityHoldings,
+      mutualFunds: mutualFundHoldings,
+    },
+    trades: tradesRes.data || [],
+  };
 };
 
 export const subscribeLeaderboard = (callback) => {

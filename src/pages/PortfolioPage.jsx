@@ -9,17 +9,25 @@ import {
   subscribeCommodityHoldings,
   subscribeMutualFunds,
   subscribeMFHoldings,
+  updateUserName,
 } from '../supabase/api';
 import TradeModal from '../components/TradeModal';
 import MudraIcon from '../components/MudraIcon';
 import { supabase } from '../supabase/client';
 
 const PortfolioPage = () => {
-  const { user, userData } = useAuth();
+  const { user, userData, refreshUserData } = useAuth();
   const [holdings, setHoldings] = useState([]);
   const [stocks, setStocks] = useState({});
   const [selectedStock, setSelectedStock] = useState(null);
   const [liveUserData, setLiveUserData] = useState(null);
+
+  // Name Editing State
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [savingName, setSavingName] = useState(false);
+  const [nameError, setNameError] = useState('');
+  const [nameSuccess, setNameSuccess] = useState('');
 
   // Phase 2 Asset States
   const [savingsList, setSavingsList] = useState([]);
@@ -129,6 +137,39 @@ const PortfolioPage = () => {
   const totalPnl = totalPortfolio - 200000;
   const totalPnlPct = (totalPnl / 200000) * 100;
 
+  const displayName = liveUserData?.name || userData?.name || 'Trader';
+  const participantId = liveUserData?.participant_id || userData?.participantId || '';
+  const role = liveUserData?.role || userData?.role || 'student';
+
+  const handleSaveName = async (e) => {
+    e.preventDefault();
+    const clean = nameInput.trim();
+    if (!clean) {
+      setNameError('Name cannot be empty.');
+      return;
+    }
+    if (clean.length < 2) {
+      setNameError('Name must be at least 2 characters.');
+      return;
+    }
+
+    setSavingName(true);
+    setNameError('');
+    setNameSuccess('');
+    try {
+      await updateUserName(userId, clean);
+      await refreshUserData();
+      setLiveUserData((prev) => (prev ? { ...prev, name: clean } : { name: clean }));
+      setIsEditingName(false);
+      setNameSuccess('Name updated successfully!');
+      setTimeout(() => setNameSuccess(''), 4000);
+    } catch (err) {
+      setNameError(err.message || 'Failed to update name.');
+    } finally {
+      setSavingName(false);
+    }
+  };
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
@@ -139,6 +180,98 @@ const PortfolioPage = () => {
         <Link to="/finance" className="btn-outline text-xs px-4 py-2 font-bold self-start sm:self-auto flex items-center gap-1.5">
           <span>Explore Finance Hub</span> →
         </Link>
+      </div>
+
+      {/* Trader Profile Header Card with Name Editing */}
+      <div className="card mb-6 border-mudra-border/80 bg-mudra-surface/60 p-4 sm:p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-mudra-accent/30 to-mudra-gold/30 border border-mudra-accent/40 flex items-center justify-center text-xl font-black text-white shrink-0 shadow-lg">
+              {(displayName || 'T').charAt(0).toUpperCase()}
+            </div>
+            <div>
+              {isEditingName ? (
+                <form onSubmit={handleSaveName} className="flex items-center gap-2 flex-wrap">
+                  <input
+                    type="text"
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    className="input py-1.5 px-3 text-sm font-semibold max-w-[240px]"
+                    placeholder="Enter display name"
+                    autoFocus
+                    maxLength={40}
+                  />
+                  <button
+                    type="submit"
+                    disabled={savingName}
+                    className="btn-primary py-1.5 px-3 text-xs font-bold"
+                  >
+                    {savingName ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditingName(false);
+                      setNameError('');
+                    }}
+                    className="btn-outline py-1.5 px-2.5 text-xs text-mudra-muted"
+                  >
+                    Cancel
+                  </button>
+                </form>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-white tracking-tight">
+                    {displayName}
+                  </h2>
+                  <button
+                    onClick={() => {
+                      setNameInput(displayName);
+                      setIsEditingName(true);
+                      setNameError('');
+                      setNameSuccess('');
+                    }}
+                    className="text-xs text-mudra-accent hover:text-amber-300 font-semibold flex items-center gap-1 hover:underline ml-1"
+                    title="Change your display name"
+                  >
+                    ✏️ Edit Name
+                  </button>
+                </div>
+              )}
+
+              {nameError && (
+                <div className="text-mudra-red text-[11px] mt-1">❌ {nameError}</div>
+              )}
+              {nameSuccess && (
+                <div className="text-mudra-green text-[11px] mt-1">✓ {nameSuccess}</div>
+              )}
+
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap text-xs text-mudra-muted">
+                <span className="font-mono bg-mudra-bg/80 px-2 py-0.5 rounded border border-mudra-border text-white">
+                  ID: {participantId || 'N/A'}
+                </span>
+                <span>•</span>
+                <span className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase tracking-wider ${
+                  role === 'admin'
+                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                    : participantId.startsWith('TRIAL')
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                }`}>
+                  {role === 'admin' ? 'God Admin' : participantId.startsWith('TRIAL') ? 'Tester / Trial' : 'Official Participant'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center border-t sm:border-t-0 pt-3 sm:pt-0 border-mudra-border/40">
+            <span className="text-[11px] text-mudra-muted uppercase font-semibold tracking-wider">Account Status</span>
+            <span className="text-xs text-mudra-green font-mono font-bold flex items-center gap-1.5 mt-0.5">
+              <span className="w-2 h-2 rounded-full bg-mudra-green animate-pulse"></span>
+              Live Tournament Active
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* Summary cards */}

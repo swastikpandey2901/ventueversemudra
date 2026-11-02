@@ -14,6 +14,7 @@ import AdminPage from './pages/AdminPage';
 import FinancePage from './pages/FinancePage';
 import ShopPage from './pages/ShopPage';
 import { runAutonomousCycleIfNeeded } from './engine/priceEngine';
+import NameSetupModal from './components/NameSetupModal';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -40,6 +41,7 @@ const AppRoutes = () => {
   return (
     <>
       <Navbar />
+      <NameSetupModal />
       <main>
       <Routes>
         <Route path="/" element={<LandingPage />} />
