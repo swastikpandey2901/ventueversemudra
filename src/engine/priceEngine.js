@@ -30,9 +30,24 @@ export const runPriceCycle = async () => {
       const sellVolume = Number(stock.sell_volume || 0);
       const liquidityFactor = Number(stock.liquidity_factor || 300000);
 
-      // 1. Calculate net order flow impact
+      // 1. Calculate normalized net order flow impact (with diminishing returns & cycle circuit breaker)
+      // Prevents massive violent price shocks when large sums of money are invested
       const netFlow = buyVolume - sellVolume;
-      const impact = netFlow / (currentPrice * liquidityFactor);
+      let impact = 0;
+      if (netFlow !== 0) {
+        // Effective depth baseline in Mudra Coins prevents penny-stock hypersensitivity
+        const effectivePrice = Math.max(100, Math.min(1000, currentPrice));
+        const marketDepth = effectivePrice * liquidityFactor;
+        const rawRatio = netFlow / marketDepth;
+
+        // Hyperbolic tangent (tanh) curves large investments smoothly into realistic market movement:
+        // - Small trades (±🪙5k - 🪙25k): organic micro-movement (±0.1% to ±0.6%)
+        // - Large trades (±🪙1L - 🪙2L): noticeable market movement (±1.5% to ±2.8%)
+        // - Whale / massive investments: smoothly saturated at circuit ceiling (max ±4.0% per 30s cycle)
+        const MAX_CYCLE_FLOW_IMPACT = 0.04; // ±4.0% max order-flow move per cycle
+        const SENSITIVITY = 0.025;
+        impact = MAX_CYCLE_FLOW_IMPACT * Math.tanh(rawRatio / SENSITIVITY);
+      }
       const j = jitter();
 
       // 2. Check AI Dynamic Target Shift OR pending news shock
