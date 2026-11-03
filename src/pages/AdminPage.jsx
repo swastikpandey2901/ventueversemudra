@@ -13,6 +13,8 @@ import {
   getAllPurchases,
   getCommodities,
   getMutualFunds,
+  adminUpdateUserCash,
+  adminResetUserPortfolio,
 } from '../supabase/api';
 import { analyzeNews } from '../ai/newsAnalyzer';
 import {
@@ -21,6 +23,7 @@ import {
   scheduleNewsShock,
   runCommodityCycle,
   runMutualFundCycle,
+  godSetStockPrice,
 } from '../engine/priceEngine';
 import { COMPANIES } from '../data/companies';
 import { supabase } from '../supabase/client';
@@ -33,16 +36,22 @@ const AdminPage = () => {
   const { userData } = useAuth();
   const navigate = useNavigate();
 
-  // Redirect if not admin
+  // Redirect if not god admin
   useEffect(() => {
-    if (userData && userData.role !== 'admin') navigate('/market');
+    if (userData) {
+      const isGodAdmin =
+        userData.role === 'admin' ||
+        ['adarsh@mudra.internal', 'swastik@mudra.internal', 'harsha@mudra.internal'].includes(userData.email) ||
+        ['adarshgod', 'swastikgod', 'harshagodess'].includes(userData.participantId);
+      if (!isGodAdmin) navigate('/market');
+    }
   }, [userData, navigate]);
 
   const [stocks, setStocks] = useState([]);
   const [trades, setTrades] = useState([]);
   const [board, setBoard] = useState([]);
   const [users, setUsers] = useState([]);
-  const [activeTab, setActiveTab] = useState('market');
+  const [activeTab, setActiveTab] = useState('god');
 
   // God Admin User Portfolio Inspection & Fund Calibration Modal
   const [inspectUserId, setInspectUserId] = useState(null);
@@ -57,6 +66,16 @@ const AdminPage = () => {
   const [godAmount, setGodAmount] = useState('');
   const [godType, setGodType] = useState('buy');
   const [godMsg, setGodMsg] = useState('');
+
+  // God Direct Stock Price Override
+  const [overrideTicker, setOverrideTicker] = useState('');
+  const [overridePrice, setOverridePrice] = useState('');
+  const [overrideMsg, setOverrideMsg] = useState('');
+
+  // God Quick Player Fund Calibrator
+  const [quickPlayerId, setQuickPlayerId] = useState('');
+  const [quickPlayerCash, setQuickPlayerCash] = useState('');
+  const [quickPlayerMsg, setQuickPlayerMsg] = useState('');
 
   // News Publisher Controls
   const [newsText, setNewsText] = useState('');
@@ -175,6 +194,71 @@ const AdminPage = () => {
       );
     } catch (err) {
       setGodMsg(`❌ ${err.message}`);
+    }
+  };
+
+  // God Direct Stock Price Override
+  const handleOverridePrice = async () => {
+    if (!overrideTicker || !overridePrice) return;
+    setOverrideMsg('');
+    try {
+      const price = parseFloat(overridePrice);
+      if (isNaN(price) || price < 1) throw new Error('Please enter a valid price (minimum 🪙1.00)');
+      await godSetStockPrice(overrideTicker, price);
+      setOverrideMsg(`✅ ${overrideTicker} price successfully overridden to 🪙${price.toFixed(2)}!`);
+      setOverridePrice('');
+    } catch (err) {
+      setOverrideMsg(`❌ ${err.message}`);
+    }
+  };
+
+  // God Quick Player Cash Calibrator Action
+  const handleQuickPlayerCashAction = async (actionType) => {
+    if (!quickPlayerId) {
+      return setQuickPlayerMsg('❌ Please select a player or tester first.');
+    }
+    const targetUser = users.find((u) => (u.uid || u.id) === quickPlayerId);
+    if (!targetUser) return setQuickPlayerMsg('❌ Player not found.');
+
+    setQuickPlayerMsg('');
+    try {
+      const currentCash = Number(targetUser.cash || 0);
+      const inputAmount = Number(quickPlayerCash);
+
+      if (actionType === 'reset') {
+        await adminUpdateUserCash(quickPlayerId, 200000);
+        setQuickPlayerMsg(`✅ Reset ${targetUser.name}'s cash to 🪙2,00,000!`);
+      } else if (actionType === 'set') {
+        if (isNaN(inputAmount) || inputAmount < 0) {
+          throw new Error('Please enter a valid positive cash amount.');
+        }
+        await adminUpdateUserCash(quickPlayerId, inputAmount);
+        setQuickPlayerMsg(`✅ Set ${targetUser.name}'s cash to 🪙${inputAmount.toLocaleString('en-IN')}!`);
+      } else if (actionType === 'bonus') {
+        if (isNaN(inputAmount) || inputAmount <= 0) {
+          throw new Error('Please enter a bonus amount greater than 0.');
+        }
+        const newCash = currentCash + inputAmount;
+        await adminUpdateUserCash(quickPlayerId, newCash);
+        setQuickPlayerMsg(`✅ Added 🪙${inputAmount.toLocaleString('en-IN')} bonus to ${targetUser.name}! (New balance: 🪙${newCash.toLocaleString('en-IN')})`);
+      } else if (actionType === 'deduct') {
+        if (isNaN(inputAmount) || inputAmount <= 0) {
+          throw new Error('Please enter a deduction amount greater than 0.');
+        }
+        const newCash = Math.max(0, currentCash - inputAmount);
+        await adminUpdateUserCash(quickPlayerId, newCash);
+        setQuickPlayerMsg(`✅ Deducted 🪙${inputAmount.toLocaleString('en-IN')} from ${targetUser.name}! (New balance: 🪙${newCash.toLocaleString('en-IN')})`);
+      } else if (actionType === 'wipe') {
+        if (!window.confirm(`Are you sure you want to completely wipe ${targetUser.name}'s portfolio and reset cash to 🪙2,00,000?`)) return;
+        await adminResetUserPortfolio(quickPlayerId, 200000);
+        setQuickPlayerMsg(`⚠️ Wiped all holdings for ${targetUser.name} and restored initial 🪙2,00,000 cash!`);
+      }
+
+      setQuickPlayerCash('');
+      const updatedUsers = await getAllUsers();
+      setUsers(updatedUsers);
+    } catch (err) {
+      setQuickPlayerMsg(`❌ ${err.message}`);
     }
   };
 
@@ -329,7 +413,7 @@ const AdminPage = () => {
   };
 
   const tabs = [
-    { id: 'market', label: '📊 Market Mover' },
+    { id: 'god', label: '⚡ God Mode' },
     { id: 'news', label: '📰 News Publisher' },
     { id: 'shop', label: '🛍️ Shop Manager' },
     { id: 'finance', label: '🏦 Finance Control' },
@@ -347,7 +431,7 @@ const AdminPage = () => {
           <h1 className="text-3xl font-black text-white">
             ⚡ <span className="text-mudra-gold">God Panel</span>
           </h1>
-          <p className="text-mudra-muted text-sm">Admin control — 999 Crore Mudra Coins</p>
+          <p className="text-mudra-muted text-sm">God Admin Control Suite — 999 Crore Mudra Capital</p>
         </div>
 
         {/* Always-On Market Status */}
@@ -384,7 +468,9 @@ const AdminPage = () => {
             onClick={() => setActiveTab(t.id)}
             className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
               activeTab === t.id
-                ? 'bg-mudra-accent text-white'
+                ? t.id === 'god'
+                  ? 'bg-amber-500 text-black font-black shadow-lg shadow-amber-500/25 border border-amber-400'
+                  : 'bg-mudra-accent text-white'
                 : 'bg-mudra-card border border-mudra-border text-mudra-muted hover:text-white'
             }`}
           >
@@ -393,127 +479,383 @@ const AdminPage = () => {
         ))}
       </div>
 
-      {/* ── MARKET MOVER ── */}
-      {activeTab === 'market' && (
-        <div className="grid md:grid-cols-2 gap-6">
-          <div className="card">
-            <h2 className="font-bold text-mudra-gold mb-4">💰 God Trade</h2>
-            <p className="text-mudra-muted text-xs mb-4">
-              Invest admin capital to move prices. Large buys push price up; large sells push it
-              down.
-            </p>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-mudra-muted block mb-1">Select Stock</label>
-                <select
-                  className="input"
-                  value={godTicker}
-                  onChange={(e) => setGodTicker(e.target.value)}
-                >
-                  <option value="">-- Select company --</option>
-                  {stocks.map((s) => (
-                    <option key={s.ticker} value={s.ticker}>
-                      {s.ticker} – {s.name} (🪙{s.currentPrice?.toFixed(2)})
-                    </option>
-                  ))}
-                </select>
+      {/* ── ⚡ GOD MODE ── */}
+      {(activeTab === 'god' || activeTab === 'market') && (
+        <div className="space-y-6">
+          {/* Top Grid: God Trade & Direct Price Override */}
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* 1. 💰 God Trade (Volume Pump / Dump) */}
+            <div className="card space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-mudra-gold text-lg flex items-center gap-1.5">
+                  <span>💰</span> God Trade (Volume Mover)
+                </h2>
+                <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-2 py-0.5 rounded">
+                  999 Crore Capital
+                </span>
               </div>
+              <p className="text-mudra-muted text-xs">
+                Pump or dump any stock realistically using massive admin volume. Buys push prices up; sells push prices down.
+              </p>
 
-              <div>
-                <label className="text-xs text-mudra-muted block mb-1">
-                  Amount (Mudra Coins)
-                </label>
-                <input
-                  type="number"
-                  className="input"
-                  placeholder="e.g. 10000000 (1 Crore)"
-                  value={godAmount}
-                  onChange={(e) => setGodAmount(e.target.value)}
-                />
-                <div className="flex gap-2 mt-1">
-                  {['1000000', '10000000', '100000000', '1000000000'].map((v) => (
-                    <button
-                      key={v}
-                      onClick={() => setGodAmount(v)}
-                      className="text-xs text-mudra-accent hover:underline"
-                    >
-                      {parseInt(v) >= 10000000
-                        ? `${parseInt(v) / 10000000}Cr`
-                        : `${parseInt(v) / 100000}L`}
-                    </button>
-                  ))}
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs text-mudra-muted block mb-1">Select Company</label>
+                  <select
+                    className="input text-sm"
+                    value={godTicker}
+                    onChange={(e) => setGodTicker(e.target.value)}
+                  >
+                    <option value="">-- Select company --</option>
+                    {stocks.map((s) => (
+                      <option key={s.ticker} value={s.ticker}>
+                        {s.ticker} – {s.name} (🪙{s.currentPrice?.toFixed(2)})
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              </div>
 
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setGodType('buy')}
-                  className={`flex-1 py-2 rounded-lg font-semibold text-sm ${
-                    godType === 'buy'
-                      ? 'bg-mudra-green text-black'
-                      : 'bg-mudra-bg text-mudra-muted'
-                  }`}
-                >
-                  📈 Pump (Buy)
-                </button>
-                <button
-                  onClick={() => setGodType('sell')}
-                  className={`flex-1 py-2 rounded-lg font-semibold text-sm ${
-                    godType === 'sell' ? 'bg-mudra-red text-white' : 'bg-mudra-bg text-mudra-muted'
-                  }`}
-                >
-                  📉 Dump (Sell)
-                </button>
-              </div>
-
-              <button onClick={handleGodTrade} className="btn-primary w-full py-3">
-                Execute God Trade 🔱
-              </button>
-
-              {godMsg && (
-                <div
-                  className={`text-sm rounded p-2 ${
-                    godMsg.startsWith('✅')
-                      ? 'text-mudra-green bg-emerald-900/20'
-                      : 'text-mudra-red bg-red-900/20'
-                  }`}
-                >
-                  {godMsg}
+                <div>
+                  <label className="text-xs text-mudra-muted block mb-1">
+                    Amount (Mudra Coins)
+                  </label>
+                  <input
+                    type="number"
+                    className="input text-sm font-mono"
+                    placeholder="e.g. 10000000 (1 Crore)"
+                    value={godAmount}
+                    onChange={(e) => setGodAmount(e.target.value)}
+                  />
+                  <div className="flex gap-2 mt-1">
+                    {['1000000', '10000000', '100000000', '1000000000'].map((v) => (
+                      <button
+                        key={v}
+                        onClick={() => setGodAmount(v)}
+                        className="text-xs text-mudra-accent hover:underline font-mono"
+                      >
+                        {parseInt(v) >= 10000000
+                          ? `${parseInt(v) / 10000000}Cr`
+                          : `${parseInt(v) / 100000}L`}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setGodType('buy')}
+                    className={`flex-1 py-2 rounded-lg font-bold text-xs transition-all ${
+                      godType === 'buy'
+                        ? 'bg-mudra-green text-black shadow-md'
+                        : 'bg-mudra-bg border border-mudra-border text-mudra-muted hover:text-white'
+                    }`}
+                  >
+                    📈 Pump (Buy Order)
+                  </button>
+                  <button
+                    onClick={() => setGodType('sell')}
+                    className={`flex-1 py-2 rounded-lg font-bold text-xs transition-all ${
+                      godType === 'sell'
+                        ? 'bg-mudra-red text-white shadow-md'
+                        : 'bg-mudra-bg border border-mudra-border text-mudra-muted hover:text-white'
+                    }`}
+                  >
+                    📉 Dump (Sell Order)
+                  </button>
+                </div>
+
+                <button onClick={handleGodTrade} className="btn-primary w-full py-2.5 font-bold text-sm shadow-md">
+                  Execute God Volume Trade 🔱
+                </button>
+
+                {godMsg && (
+                  <div
+                    className={`text-xs rounded-lg p-2 font-semibold ${
+                      godMsg.startsWith('✅')
+                        ? 'text-mudra-green bg-emerald-950/40 border border-emerald-500/30'
+                        : 'text-mudra-red bg-red-950/40 border border-red-500/30'
+                    }`}
+                  >
+                    {godMsg}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 2. 🎯 God Direct Price Override (Exact Price Setter) */}
+            <div className="card space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-mudra-gold text-lg flex items-center gap-1.5">
+                  <span>🎯</span> Direct Price Override
+                </h2>
+                <span className="text-[11px] font-mono text-amber-400 bg-amber-950/40 border border-amber-500/30 px-2 py-0.5 rounded">
+                  Instant Override
+                </span>
+              </div>
+              <p className="text-mudra-muted text-xs">
+                Directly force any stock's current price to an exact value immediately without waiting for order cycles.
+              </p>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs text-mudra-muted block mb-1">Select Target Stock</label>
+                  <select
+                    className="input text-sm"
+                    value={overrideTicker}
+                    onChange={(e) => {
+                      setOverrideTicker(e.target.value);
+                      const st = stocks.find((s) => s.ticker === e.target.value);
+                      if (st) setOverridePrice(st.currentPrice?.toString() || '');
+                    }}
+                  >
+                    <option value="">-- Choose company --</option>
+                    {stocks.map((s) => (
+                      <option key={s.ticker} value={s.ticker}>
+                        {s.ticker} – {s.name} (Now: 🪙{s.currentPrice?.toFixed(2)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs text-mudra-muted">New Target Price (Mudra Coins)</label>
+                    {overrideTicker && (
+                      <span className="text-[11px] text-mudra-gold font-mono">
+                        Current: 🪙{stocks.find((s) => s.ticker === overrideTicker)?.currentPrice?.toFixed(2) || '--'}
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    className="input text-sm font-mono"
+                    placeholder="e.g. 750.00"
+                    value={overridePrice}
+                    onChange={(e) => setOverridePrice(e.target.value)}
+                  />
+
+                  {/* Quick percentage adjustment shortcuts */}
+                  {overrideTicker && (
+                    <div className="flex gap-1.5 mt-1.5 flex-wrap">
+                      {[
+                        { label: '+25%', factor: 1.25 },
+                        { label: '+50%', factor: 1.5 },
+                        { label: '+100%', factor: 2.0 },
+                        { label: '-25%', factor: 0.75 },
+                        { label: '-50%', factor: 0.5 },
+                      ].map((adj) => (
+                        <button
+                          key={adj.label}
+                          type="button"
+                          onClick={() => {
+                            const cur = stocks.find((s) => s.ticker === overrideTicker)?.currentPrice || 100;
+                            setOverridePrice((cur * adj.factor).toFixed(2));
+                          }}
+                          className="text-[11px] px-2 py-0.5 rounded bg-mudra-bg border border-mudra-border text-mudra-muted hover:text-white"
+                        >
+                          {adj.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={handleOverridePrice}
+                  disabled={!overrideTicker || !overridePrice}
+                  className="btn-green w-full py-2.5 font-bold text-sm shadow-md"
+                >
+                  ⚡ Set Exact Price Instantly 🔱
+                </button>
+
+                {overrideMsg && (
+                  <div
+                    className={`text-xs rounded-lg p-2 font-semibold ${
+                      overrideMsg.startsWith('✅')
+                        ? 'text-mudra-green bg-emerald-950/40 border border-emerald-500/30'
+                        : 'text-mudra-red bg-red-950/40 border border-red-500/30'
+                    }`}
+                  >
+                    {overrideMsg}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Live Stock Prices */}
-          <div className="card overflow-y-auto max-h-96">
-            <h2 className="font-bold text-white mb-3">Live Prices</h2>
-            <div className="space-y-1">
-              {stocks.map((s) => {
-                const chg = s.previousPrice
-                  ? ((s.currentPrice - s.previousPrice) / s.previousPrice) * 100
-                  : 0;
-                return (
-                  <div
-                    key={s.ticker}
-                    className="flex items-center justify-between py-1.5 border-b border-mudra-border/50 text-sm"
+          {/* Bottom Grid: Quick Player Calibrator & Realtime Stock Monitor */}
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* 3. 👑 Quick Player Cash & Balance Calibrator */}
+            <div className="card space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-mudra-gold text-lg flex items-center gap-1.5">
+                  <span>👑</span> Player & Tester Cash Control
+                </h2>
+                <span className="text-[11px] font-mono text-purple-400 bg-purple-950/40 border border-purple-500/30 px-2 py-0.5 rounded">
+                  God Calibrator
+                </span>
+              </div>
+              <p className="text-mudra-muted text-xs">
+                Bring participants or testers to any cash amount, grant event bonus capital, or wipe excess profits.
+              </p>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs text-mudra-muted block mb-1">Select Player or Tester</label>
+                  <select
+                    className="input text-sm"
+                    value={quickPlayerId}
+                    onChange={(e) => setQuickPlayerId(e.target.value)}
                   >
-                    <span className="font-mono text-white w-16">{s.ticker}</span>
-                    <span className="font-mono text-white flex items-center gap-0.5">
-                      <MudraIcon className="w-3 h-3" />{s.currentPrice?.toFixed(2)}
-                    </span>
-                    <span
-                      className={`font-mono text-xs ${
-                        chg >= 0 ? 'text-mudra-green' : 'text-mudra-red'
-                      }`}
-                    >
-                      {chg >= 0 ? '+' : ''}
-                      {chg.toFixed(2)}%
-                    </span>
-                    {s.pendingShock && <span className="text-mudra-gold text-xs">⏳</span>}
+                    <option value="">-- Choose Trader ({users.filter((u) => u.role !== 'admin').length} accounts) --</option>
+                    {users
+                      .filter((u) => u.role !== 'admin')
+                      .map((u) => (
+                        <option key={u.uid || u.id} value={u.uid || u.id}>
+                          {u.name} [{u.participantId || 'NO-ID'}] – Cash: 🪙{Number(u.cash || 0).toLocaleString('en-IN')}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                {quickPlayerId && (
+                  <div className="bg-mudra-bg p-3 rounded-xl border border-mudra-border space-y-2">
+                    {(() => {
+                      const sel = users.find((u) => (u.uid || u.id) === quickPlayerId);
+                      if (!sel) return null;
+                      return (
+                        <div className="flex items-center justify-between text-xs">
+                          <div>
+                            <span className="text-white font-bold">{sel.name}</span>
+                            <span className="text-mudra-muted font-mono ml-1.5">({sel.participantId})</span>
+                          </div>
+                          <div className="font-mono text-mudra-green font-bold flex items-center gap-1">
+                            <MudraIcon className="w-3.5 h-3.5" />
+                            {Number(sel.cash || 0).toLocaleString('en-IN')}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    <div>
+                      <label className="text-[11px] text-mudra-muted block mb-1">
+                        Amount to Set / Add / Deduct
+                      </label>
+                      <input
+                        type="number"
+                        placeholder="e.g. 50000 or 250000"
+                        className="input text-xs font-mono py-1.5"
+                        value={quickPlayerCash}
+                        onChange={(e) => setQuickPlayerCash(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1.5 pt-1">
+                      <button
+                        onClick={() => handleQuickPlayerCashAction('set')}
+                        className="btn-primary text-xs py-1.5 font-bold"
+                        title="Set cash exactly to this amount"
+                      >
+                        Set Cash
+                      </button>
+                      <button
+                        onClick={() => handleQuickPlayerCashAction('bonus')}
+                        className="btn-green text-xs py-1.5 font-bold"
+                        title="Add this bonus amount to player"
+                      >
+                        + Add Bonus
+                      </button>
+                      <button
+                        onClick={() => handleQuickPlayerCashAction('deduct')}
+                        className="bg-red-950/60 border border-red-500/50 hover:bg-red-900/60 text-red-300 text-xs py-1.5 rounded-lg font-bold"
+                        title="Deduct this amount from player"
+                      >
+                        - Deduct
+                      </button>
+                    </div>
+
+                    <div className="flex gap-2 pt-1 border-t border-mudra-border/40">
+                      <button
+                        onClick={() => handleQuickPlayerCashAction('reset')}
+                        className="flex-1 py-1 text-xs rounded bg-mudra-card border border-mudra-border text-mudra-gold hover:text-white font-semibold"
+                      >
+                        🔄 Reset to 🪙2L
+                      </button>
+                      <button
+                        onClick={() => setInspectUserId(quickPlayerId)}
+                        className="flex-1 py-1 text-xs rounded bg-mudra-card border border-mudra-border text-mudra-accent hover:text-white font-semibold"
+                      >
+                        🔍 Deep Inspect
+                      </button>
+                    </div>
                   </div>
-                );
-              })}
+                )}
+
+                {quickPlayerMsg && (
+                  <div
+                    className={`text-xs rounded-lg p-2 font-semibold ${
+                      quickPlayerMsg.startsWith('✅') || quickPlayerMsg.startsWith('⚠️')
+                        ? 'text-mudra-green bg-emerald-950/40 border border-emerald-500/30'
+                        : 'text-mudra-red bg-red-950/40 border border-red-500/30'
+                    }`}
+                  >
+                    {quickPlayerMsg}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 4. 📈 Real-Time 30-Stock Price Monitor */}
+            <div className="card space-y-2">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-white text-base">📈 Live Market Prices ({stocks.length})</h2>
+                <span className="text-[11px] font-mono text-mudra-muted">Continuous 30s</span>
+              </div>
+              <div className="space-y-1 overflow-y-auto max-h-[300px] pr-1">
+                {stocks.map((s) => {
+                  const chg = s.previousPrice
+                    ? ((s.currentPrice - s.previousPrice) / s.previousPrice) * 100
+                    : 0;
+                  return (
+                    <div
+                      key={s.ticker}
+                      className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-mudra-bg/70 border-b border-mudra-border/40 text-xs transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-white font-bold w-14">{s.ticker}</span>
+                        <span className="text-[11px] text-mudra-muted truncate max-w-[120px]">{s.name}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono text-white font-bold flex items-center gap-0.5">
+                          <MudraIcon className="w-3 h-3" />{s.currentPrice?.toFixed(2)}
+                        </span>
+                        <span
+                          className={`font-mono text-xs w-16 text-right font-semibold ${
+                            chg >= 0 ? 'text-mudra-green' : 'text-mudra-red'
+                          }`}
+                        >
+                          {chg >= 0 ? '+' : ''}
+                          {chg.toFixed(2)}%
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOverrideTicker(s.ticker);
+                            setOverridePrice(s.currentPrice?.toString() || '');
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className="text-[10px] text-mudra-gold hover:underline font-bold"
+                          title="Override this stock's price"
+                        >
+                          ⚡ Edit
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>

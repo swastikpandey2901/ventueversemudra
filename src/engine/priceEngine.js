@@ -237,3 +237,33 @@ export const seedStocks = async (companies) => {
     throw error;
   }
 };
+
+export const godSetStockPrice = async (ticker, newPrice) => {
+  const cleanPrice = Math.max(1, parseFloat(Number(newPrice).toFixed(2)));
+  if (isNaN(cleanPrice)) throw new Error('Please enter a valid target price.');
+
+  const { data: stock, error: fetchErr } = await supabase
+    .from('stocks')
+    .select('*')
+    .eq('ticker', ticker)
+    .single();
+  if (fetchErr || !stock) throw new Error('Stock not found');
+
+  const now = Date.now();
+  let history = Array.isArray(stock.price_history) ? [...stock.price_history] : [];
+  history.push({ price: cleanPrice, timestamp: now });
+  if (history.length > 200) history.splice(0, history.length - 200);
+
+  const { error } = await supabase
+    .from('stocks')
+    .update({
+      previous_price: stock.current_price,
+      current_price: cleanPrice,
+      price_history: history,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('ticker', ticker);
+
+  if (error) throw error;
+  return cleanPrice;
+};
