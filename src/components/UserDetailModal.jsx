@@ -59,12 +59,12 @@ const UserDetailModal = ({ userId, onClose }) => {
   const isTester = (profile.participantId || '').startsWith('TRIAL');
 
   const handleResetCash = async (target = 200000) => {
-    if (!window.confirm(`Reset ${profile.name}'s cash balance to 🪙${target.toLocaleString('en-IN')}?`)) return;
+    if (!window.confirm(`Reset ${profile.name}'s entire portfolio (all liquid cash, FDs, stocks, funds) to 🪙${target.toLocaleString('en-IN')}?`)) return;
     setFundActionLoading(true);
     setFundMsg('');
     try {
-      await adminUpdateUserCash(userId, target);
-      setFundMsg(`✅ Cash balance set to 🪙${target.toLocaleString('en-IN')}`);
+      await adminResetUserPortfolio(userId, target);
+      setFundMsg(`✅ Entire portfolio liquidated & cash brought to 🪙${target.toLocaleString('en-IN')}!`);
       await reloadData();
     } catch (err) {
       setFundMsg(`❌ ${err.message}`);
@@ -99,8 +99,8 @@ const UserDetailModal = ({ userId, onClose }) => {
     setFundActionLoading(true);
     setFundMsg('');
     try {
-      await adminUpdateUserCash(userId, num);
-      setFundMsg(`✅ Cash set to 🪙${num.toLocaleString('en-IN')}`);
+      await adminResetUserPortfolio(userId, num);
+      setFundMsg(`✅ All assets (FD, stocks, funds) liquidated & net worth brought to 🪙${num.toLocaleString('en-IN')}!`);
       setCustomCashInput('');
       await reloadData();
     } catch (err) {

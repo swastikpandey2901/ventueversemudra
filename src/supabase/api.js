@@ -266,16 +266,31 @@ export const adminUpdateUserCash = async (userId, newCashAmount) => {
 };
 
 export const adminResetUserPortfolio = async (userId, targetCash = 200000) => {
-  await adminUpdateUserCash(userId, targetCash);
+  const cleanAmount = Number(targetCash);
+  if (isNaN(cleanAmount) || cleanAmount < 0) {
+    throw new Error('Please enter a valid cash amount (0 or greater).');
+  }
+
+  // 1. Wipe all stock holdings
   await supabase.from('holdings').delete().eq('user_id', userId);
+
+  // 2. Wipe all precious metal / commodity holdings
   await supabase.from('commodity_holdings').delete().eq('user_id', userId);
+
+  // 3. Wipe all mutual fund holdings
   await supabase.from('mf_holdings').delete().eq('user_id', userId);
-  await supabase
-    .from('savings')
-    .update({ status: 'cancelled' })
-    .eq('user_id', userId)
-    .eq('status', 'active');
-  return true;
+
+  // 4. Wipe all fixed deposit savings records (both active and matured)
+  await supabase.from('savings').delete().eq('user_id', userId);
+
+  // 5. Update user profile cash to exact target amount
+  const { error } = await supabase
+    .from('profiles')
+    .update({ cash: cleanAmount, updated_at: new Date().toISOString() })
+    .eq('id', userId);
+
+  if (error) throw error;
+  return cleanAmount;
 };
 
 // ─── HOLDINGS ─────────────────────────────────────────────────────────────────

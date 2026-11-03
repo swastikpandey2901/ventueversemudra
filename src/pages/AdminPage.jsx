@@ -24,6 +24,8 @@ import {
   runCommodityCycle,
   runMutualFundCycle,
   godSetStockPrice,
+  godMoveToTargetPrice,
+  godCancelTargetPrice,
 } from '../engine/priceEngine';
 import { COMPANIES } from '../data/companies';
 import { supabase } from '../supabase/client';
@@ -67,7 +69,8 @@ const AdminPage = () => {
   const [godType, setGodType] = useState('buy');
   const [godMsg, setGodMsg] = useState('');
 
-  // God Direct Stock Price Override
+  // God Direct Stock Price Override & AI Target Shift
+  const [priceSetMode, setPriceSetMode] = useState('direct'); // 'direct' | 'move'
   const [overrideTicker, setOverrideTicker] = useState('');
   const [overridePrice, setOverridePrice] = useState('');
   const [overrideMsg, setOverrideMsg] = useState('');
@@ -197,16 +200,31 @@ const AdminPage = () => {
     }
   };
 
-  // God Direct Stock Price Override
+  // God Direct Stock Price Override & AI Target Shift
   const handleOverridePrice = async () => {
     if (!overrideTicker || !overridePrice) return;
     setOverrideMsg('');
     try {
       const price = parseFloat(overridePrice);
       if (isNaN(price) || price < 1) throw new Error('Please enter a valid price (minimum 🪙1.00)');
-      await godSetStockPrice(overrideTicker, price);
-      setOverrideMsg(`✅ ${overrideTicker} price successfully overridden to 🪙${price.toFixed(2)}!`);
+
+      if (priceSetMode === 'direct') {
+        await godSetStockPrice(overrideTicker, price);
+        setOverrideMsg(`⚡ [DIRECT SET] ${overrideTicker} price overridden to 🪙${price.toFixed(2)} instantly!`);
+      } else {
+        await godMoveToTargetPrice(overrideTicker, price);
+        setOverrideMsg(`🤖 [MOVE TO TARGET] ${overrideTicker} target set to 🪙${price.toFixed(2)}. AI will now dynamically shift the price smoothly towards 🪙${price.toFixed(2)} with organic market drift!`);
+      }
       setOverridePrice('');
+    } catch (err) {
+      setOverrideMsg(`❌ ${err.message}`);
+    }
+  };
+
+  const handleCancelTargetShift = async (ticker) => {
+    try {
+      await godCancelTargetPrice(ticker);
+      setOverrideMsg(`ℹ️ Cancelled AI target shift for ${ticker}.`);
     } catch (err) {
       setOverrideMsg(`❌ ${err.message}`);
     }
@@ -226,30 +244,32 @@ const AdminPage = () => {
       const inputAmount = Number(quickPlayerCash);
 
       if (actionType === 'reset') {
-        await adminUpdateUserCash(quickPlayerId, 200000);
-        setQuickPlayerMsg(`✅ Reset ${targetUser.name}'s cash to 🪙2,00,000!`);
+        // Liquidate all assets (FD, stocks, commodities, funds) and reset cash to 200,000
+        await adminResetUserPortfolio(quickPlayerId, 200000);
+        setQuickPlayerMsg(`✅ Reset ${targetUser.name}'s entire portfolio (liquid cash, FDs, stocks, funds) to 🪙2,00,000!`);
       } else if (actionType === 'set') {
         if (isNaN(inputAmount) || inputAmount < 0) {
           throw new Error('Please enter a valid positive cash amount.');
         }
-        await adminUpdateUserCash(quickPlayerId, inputAmount);
-        setQuickPlayerMsg(`✅ Set ${targetUser.name}'s cash to 🪙${inputAmount.toLocaleString('en-IN')}!`);
+        // Liquidate all assets (FD, stocks, commodities, funds) and bring total net worth to exact amount
+        await adminResetUserPortfolio(quickPlayerId, inputAmount);
+        setQuickPlayerMsg(`✅ All assets (FD, stocks, funds) liquidated & set ${targetUser.name}'s total net worth to 🪙${inputAmount.toLocaleString('en-IN')}!`);
       } else if (actionType === 'bonus') {
         if (isNaN(inputAmount) || inputAmount <= 0) {
           throw new Error('Please enter a bonus amount greater than 0.');
         }
         const newCash = currentCash + inputAmount;
         await adminUpdateUserCash(quickPlayerId, newCash);
-        setQuickPlayerMsg(`✅ Added 🪙${inputAmount.toLocaleString('en-IN')} bonus to ${targetUser.name}! (New balance: 🪙${newCash.toLocaleString('en-IN')})`);
+        setQuickPlayerMsg(`✅ Added 🪙${inputAmount.toLocaleString('en-IN')} bonus to ${targetUser.name}! (New liquid balance: 🪙${newCash.toLocaleString('en-IN')})`);
       } else if (actionType === 'deduct') {
         if (isNaN(inputAmount) || inputAmount <= 0) {
           throw new Error('Please enter a deduction amount greater than 0.');
         }
         const newCash = Math.max(0, currentCash - inputAmount);
         await adminUpdateUserCash(quickPlayerId, newCash);
-        setQuickPlayerMsg(`✅ Deducted 🪙${inputAmount.toLocaleString('en-IN')} from ${targetUser.name}! (New balance: 🪙${newCash.toLocaleString('en-IN')})`);
+        setQuickPlayerMsg(`✅ Deducted 🪙${inputAmount.toLocaleString('en-IN')} from ${targetUser.name}! (New liquid balance: 🪙${newCash.toLocaleString('en-IN')})`);
       } else if (actionType === 'wipe') {
-        if (!window.confirm(`Are you sure you want to completely wipe ${targetUser.name}'s portfolio and reset cash to 🪙2,00,000?`)) return;
+        if (!window.confirm(`Are you sure you want to completely wipe all holdings and reset ${targetUser.name} to 🪙2,00,000?`)) return;
         await adminResetUserPortfolio(quickPlayerId, 200000);
         setQuickPlayerMsg(`⚠️ Wiped all holdings for ${targetUser.name} and restored initial 🪙2,00,000 cash!`);
       }
@@ -582,18 +602,48 @@ const AdminPage = () => {
               </div>
             </div>
 
-            {/* 2. 🎯 God Direct Price Override (Exact Price Setter) */}
+            {/* 2. 🎯 God Company Price Control: Direct Set & AI Shift to Target */}
             <div className="card space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="font-bold text-mudra-gold text-lg flex items-center gap-1.5">
-                  <span>🎯</span> Direct Price Override
+                  <span>🎯</span> Company Price Setter
                 </h2>
-                <span className="text-[11px] font-mono text-amber-400 bg-amber-950/40 border border-amber-500/30 px-2 py-0.5 rounded">
-                  Instant Override
-                </span>
+                <div className="flex gap-1 bg-mudra-bg p-0.5 rounded-lg border border-mudra-border">
+                  <button
+                    type="button"
+                    onClick={() => setPriceSetMode('direct')}
+                    className={`px-2 py-0.5 text-xs rounded-md font-bold transition-all ${
+                      priceSetMode === 'direct'
+                        ? 'bg-amber-500 text-black shadow'
+                        : 'text-mudra-muted hover:text-white'
+                    }`}
+                  >
+                    ⚡ Direct Set
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPriceSetMode('move')}
+                    className={`px-2 py-0.5 text-xs rounded-md font-bold transition-all ${
+                      priceSetMode === 'move'
+                        ? 'bg-mudra-accent text-white shadow'
+                        : 'text-mudra-muted hover:text-white'
+                    }`}
+                  >
+                    🤖 Move to Target
+                  </button>
+                </div>
               </div>
+
               <p className="text-mudra-muted text-xs">
-                Directly force any stock's current price to an exact value immediately without waiting for order cycles.
+                {priceSetMode === 'direct' ? (
+                  <span>
+                    <strong className="text-amber-400">⚡ Direct Set Mode:</strong> Sets the stock price to your target immediately across all users.
+                  </span>
+                ) : (
+                  <span>
+                    <strong className="text-mudra-accent">🤖 Move to Target Mode:</strong> Instructs the AI engine to shift the market price smoothly towards your target cycle-by-cycle with organic candles.
+                  </span>
+                )}
               </p>
 
               <div className="space-y-3">
@@ -609,17 +659,22 @@ const AdminPage = () => {
                     }}
                   >
                     <option value="">-- Choose company --</option>
-                    {stocks.map((s) => (
-                      <option key={s.ticker} value={s.ticker}>
-                        {s.ticker} – {s.name} (Now: 🪙{s.currentPrice?.toFixed(2)})
-                      </option>
-                    ))}
+                    {stocks.map((s) => {
+                      const isDrifting = Number(s.pendingShockAt) === 1;
+                      return (
+                        <option key={s.ticker} value={s.ticker}>
+                          {s.ticker} – {s.name} (Now: 🪙{s.currentPrice?.toFixed(2)}){isDrifting ? ` 🤖 [Target: 🪙${s.pendingShock}]` : ''}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
                 <div>
                   <div className="flex justify-between items-center mb-1">
-                    <label className="text-xs text-mudra-muted">New Target Price (Mudra Coins)</label>
+                    <label className="text-xs text-mudra-muted">
+                      {priceSetMode === 'direct' ? 'New Price' : 'Target Price to Shift To'} (Mudra Coins)
+                    </label>
                     {overrideTicker && (
                       <span className="text-[11px] text-mudra-gold font-mono">
                         Current: 🪙{stocks.find((s) => s.ticker === overrideTicker)?.currentPrice?.toFixed(2) || '--'}
@@ -665,20 +720,56 @@ const AdminPage = () => {
                 <button
                   onClick={handleOverridePrice}
                   disabled={!overrideTicker || !overridePrice}
-                  className="btn-green w-full py-2.5 font-bold text-sm shadow-md"
+                  className={`w-full py-2.5 font-bold text-sm shadow-md rounded-lg transition-all ${
+                    priceSetMode === 'direct'
+                      ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-amber-500/20'
+                      : 'bg-mudra-accent hover:bg-purple-600 text-white shadow-purple-500/20'
+                  }`}
                 >
-                  ⚡ Set Exact Price Instantly 🔱
+                  {priceSetMode === 'direct'
+                    ? '⚡ Set Price Instantly 🔱'
+                    : '🤖 Shift Market to This Price (AI Drift) 📈'}
                 </button>
 
                 {overrideMsg && (
                   <div
                     className={`text-xs rounded-lg p-2 font-semibold ${
-                      overrideMsg.startsWith('✅')
+                      overrideMsg.startsWith('✅') || overrideMsg.startsWith('⚡') || overrideMsg.startsWith('🤖')
                         ? 'text-mudra-green bg-emerald-950/40 border border-emerald-500/30'
                         : 'text-mudra-red bg-red-950/40 border border-red-500/30'
                     }`}
                   >
                     {overrideMsg}
+                  </div>
+                )}
+
+                {/* Active AI Target Shifts Monitor */}
+                {stocks.some((s) => Number(s.pendingShockAt) === 1) && (
+                  <div className="pt-2 border-t border-mudra-border/50 space-y-1.5">
+                    <span className="text-[11px] font-bold text-mudra-accent flex items-center gap-1">
+                      <span>🤖</span> Active AI Price Shifts in Progress:
+                    </span>
+                    <div className="space-y-1 max-h-[100px] overflow-y-auto">
+                      {stocks
+                        .filter((s) => Number(s.pendingShockAt) === 1)
+                        .map((s) => (
+                          <div
+                            key={s.ticker}
+                            className="flex items-center justify-between p-1.5 rounded bg-purple-950/30 border border-purple-500/30 text-xs"
+                          >
+                            <span className="font-mono font-bold text-white">{s.ticker}</span>
+                            <span className="text-mudra-muted text-[11px]">
+                              🪙{s.currentPrice?.toFixed(2)} → <strong className="text-emerald-400">🪙{s.pendingShock}</strong>
+                            </span>
+                            <button
+                              onClick={() => handleCancelTargetShift(s.ticker)}
+                              className="text-[10px] text-mudra-red hover:underline font-bold"
+                            >
+                              ✕ Cancel
+                            </button>
+                          </div>
+                        ))}
+                    </div>
                   </div>
                 )}
               </div>

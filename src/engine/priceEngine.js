@@ -35,19 +35,37 @@ export const runPriceCycle = async () => {
       const impact = netFlow / (currentPrice * liquidityFactor);
       const j = jitter();
 
-      // 2. Check pending news shock
-      let shockImpact = 0;
+      // 2. Check AI Dynamic Target Shift OR pending news shock
+      let newPrice;
       let clearShock = false;
-      if (stock.pending_shock !== null && stock.pending_shock_at) {
-        if (now >= Number(stock.pending_shock_at)) {
-          shockImpact = Number(stock.pending_shock) / 100;
-          clearShock = true;
-        }
-      }
 
-      const totalImpact = impact + j + shockImpact;
-      const rawNewPrice = currentPrice * (1 + totalImpact);
-      const newPrice = Math.max(1, parseFloat(rawNewPrice.toFixed(2)));
+      if (stock.pending_shock !== null && Number(stock.pending_shock_at) === 1) {
+        // Mode B: AI Dynamic Target Shift
+        const targetPrice = Number(stock.pending_shock);
+        const diff = targetPrice - currentPrice;
+        if (Math.abs(diff) <= 0.35 || Math.abs(diff) / currentPrice < 0.003) {
+          // Reached target within 0.3%! Snap to target and complete the shift
+          newPrice = targetPrice;
+          clearShock = true;
+        } else {
+          // Move ~22% closer to target each cycle with realistic micro-volatility
+          const driftStep = diff * 0.22;
+          const microJitter = (Math.random() - 0.49) * 0.003 * currentPrice;
+          newPrice = Math.max(1, parseFloat((currentPrice + driftStep + microJitter).toFixed(2)));
+        }
+      } else {
+        // Standard Market Order Flow + News Shock:
+        let shockImpact = 0;
+        if (stock.pending_shock !== null && stock.pending_shock_at) {
+          if (now >= Number(stock.pending_shock_at)) {
+            shockImpact = Number(stock.pending_shock) / 100;
+            clearShock = true;
+          }
+        }
+        const totalImpact = impact + j + shockImpact;
+        const rawNewPrice = currentPrice * (1 + totalImpact);
+        newPrice = Math.max(1, parseFloat(rawNewPrice.toFixed(2)));
+      }
 
       // 3. Update price history array
       let history = Array.isArray(stock.price_history) ? [...stock.price_history] : [];
@@ -260,10 +278,45 @@ export const godSetStockPrice = async (ticker, newPrice) => {
       previous_price: stock.current_price,
       current_price: cleanPrice,
       price_history: history,
+      pending_shock: null,
+      pending_shock_at: null,
       updated_at: new Date().toISOString(),
     })
     .eq('ticker', ticker);
 
   if (error) throw error;
   return cleanPrice;
+};
+
+// Mode B: Move to Target (Dynamic AI Shift over cycles)
+export const godMoveToTargetPrice = async (ticker, targetPrice) => {
+  const cleanTarget = Math.max(1, parseFloat(Number(targetPrice).toFixed(2)));
+  if (isNaN(cleanTarget)) throw new Error('Please enter a valid target price.');
+
+  const { error } = await supabase
+    .from('stocks')
+    .update({
+      pending_shock: cleanTarget,
+      pending_shock_at: 1, // Sentinel indicating active AI Target Shift
+      updated_at: new Date().toISOString(),
+    })
+    .eq('ticker', ticker);
+
+  if (error) throw error;
+  return cleanTarget;
+};
+
+// Cancel AI Target Shift
+export const godCancelTargetPrice = async (ticker) => {
+  const { error } = await supabase
+    .from('stocks')
+    .update({
+      pending_shock: null,
+      pending_shock_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('ticker', ticker);
+
+  if (error) throw error;
+  return true;
 };
