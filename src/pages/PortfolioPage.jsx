@@ -20,6 +20,7 @@ const PortfolioPage = () => {
   const [holdings, setHoldings] = useState([]);
   const [stocks, setStocks] = useState({});
   const [selectedStock, setSelectedStock] = useState(null);
+  const [tradeActionType, setTradeActionType] = useState('buy');
   const [liveUserData, setLiveUserData] = useState(null);
 
   // Name Editing State
@@ -411,12 +412,26 @@ const PortfolioPage = () => {
                       <div className="text-xs">{h.pnlPct >= 0 ? '+' : ''}{h.pnlPct.toFixed(1)}%</div>
                     </td>
                     <td className="text-right">
-                      <button
-                        onClick={() => setSelectedStock(h.stock)}
-                        className="text-xs btn-outline px-2 py-1"
-                      >
-                        Trade
-                      </button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => {
+                            setSelectedStock(h.stock);
+                            setTradeActionType('sell');
+                          }}
+                          className="text-xs px-2.5 py-1 rounded-lg bg-red-950/40 border border-red-500/40 text-red-300 hover:bg-red-900/60 font-bold transition-all shadow-sm"
+                        >
+                          Sell
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedStock(h.stock);
+                            setTradeActionType('buy');
+                          }}
+                          className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/60 font-bold transition-all shadow-sm"
+                        >
+                          Buy More
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -525,7 +540,11 @@ const PortfolioPage = () => {
       </div>
 
       {selectedStock && (
-        <TradeModal stock={selectedStock} onClose={() => setSelectedStock(null)} />
+        <TradeModal
+          stock={selectedStock}
+          defaultType={tradeActionType}
+          onClose={() => setSelectedStock(null)}
+        />
       )}
     </div>
   );
