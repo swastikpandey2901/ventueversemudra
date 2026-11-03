@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { placeTrade } from '../supabase/api';
 import { useAuth } from '../context/AuthContext';
 import MudraIcon from './MudraIcon';
@@ -10,17 +10,28 @@ const TradeModal = ({ stock, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const isSubmittingRef = useRef(false);
 
   if (!stock) return null;
 
-  const totalCost = quantity * stock.currentPrice;
-  const maxBuyQty = Math.floor((userData?.cash || 0) / stock.currentPrice);
+  const validQty = Math.max(1, Math.floor(Number(quantity) || 1));
+  const totalCost = validQty * stock.currentPrice;
+  const maxBuyQty = Math.max(0, Math.floor((userData?.cash || 0) / stock.currentPrice));
 
   const handleTrade = async () => {
-    if (quantity <= 0) return setError('Enter a valid quantity');
+    if (isSubmittingRef.current || loading) return;
+
+    const cleanQty = Math.max(1, Math.floor(Number(quantity) || 1));
+    if (cleanQty <= 0) {
+      setError('Enter a valid quantity (1 or more)');
+      return;
+    }
+
+    isSubmittingRef.current = true;
     setError('');
     setSuccess('');
     setLoading(true);
+
     try {
       const currentUserId = user?.id || user?.uid;
       if (!currentUserId) throw new Error('User not logged in');
@@ -30,15 +41,18 @@ const TradeModal = ({ stock, onClose }) => {
         userName: userData?.name || 'Trader',
         ticker: stock.ticker,
         type,
-        quantity: parseInt(quantity),
+        quantity: cleanQty,
         price: stock.currentPrice,
       });
-      setSuccess(`${type === 'buy' ? '✅ Bought' : '✅ Sold'} ${quantity} shares of ${stock.ticker} @ ${stock.currentPrice}`);
+
+      setSuccess(
+        `${type === 'buy' ? '✅ Bought' : '✅ Sold'} ${cleanQty} share${cleanQty > 1 ? 's' : ''} of ${stock.ticker} @ 🪙${stock.currentPrice.toLocaleString('en-IN')}`
+      );
       await refreshUserData();
-      setTimeout(onClose, 1500);
+      setTimeout(onClose, 1200);
     } catch (err) {
-      setError(err.message);
-    } finally {
+      setError(err.message || 'Trade execution failed.');
+      isSubmittingRef.current = false;
       setLoading(false);
     }
   };
@@ -84,15 +98,21 @@ const TradeModal = ({ stock, onClose }) => {
         <div className="mb-3">
           <label className="text-xs text-mudra-muted mb-1 block">Quantity</label>
           <div className="flex gap-2">
-            <button onClick={() => setQuantity(q => Math.max(1, q - 1))} className="btn-outline w-10 text-lg">−</button>
+            <button onClick={() => setQuantity(q => Math.max(1, (Number(q) || 1) - 1))} className="btn-outline w-10 text-lg">−</button>
             <input
               type="number"
               min="1"
               value={quantity}
-              onChange={e => setQuantity(parseInt(e.target.value) || 1)}
+              onChange={e => {
+                const val = e.target.value;
+                setQuantity(val === '' ? '' : Math.max(1, parseInt(val, 10) || 1));
+              }}
+              onBlur={() => {
+                if (!quantity || Number(quantity) < 1) setQuantity(1);
+              }}
               className="input text-center font-mono text-lg"
             />
-            <button onClick={() => setQuantity(q => q + 1)} className="btn-outline w-10 text-lg">+</button>
+            <button onClick={() => setQuantity(q => (Number(q) || 0) + 1)} className="btn-outline w-10 text-lg">+</button>
           </div>
           {type === 'buy' && (
             <button

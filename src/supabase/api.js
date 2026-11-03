@@ -84,6 +84,20 @@ const normalizeStock = (s) => ({
 });
 
 // ─── TRADES ───────────────────────────────────────────────────────────────────
+const tradeMutexQueue = new Map();
+
+const acquireTradeLock = async (userId) => {
+  const key = String(userId);
+  while (tradeMutexQueue.has(key)) {
+    await new Promise((resolve) => setTimeout(resolve, 35));
+  }
+  tradeMutexQueue.set(key, true);
+};
+
+const releaseTradeLock = (userId) => {
+  tradeMutexQueue.delete(String(userId));
+};
+
 export const placeTrade = async ({
   userId,
   userName,
@@ -92,145 +106,176 @@ export const placeTrade = async ({
   quantity,
   price,
 }) => {
-  const totalValue = quantity * price;
+  const cleanQty = Math.max(1, Math.floor(Number(quantity) || 1));
+  const cleanPrice = Number(price);
+  if (!cleanPrice || cleanPrice <= 0) throw new Error('Invalid stock price');
+  const totalValue = cleanQty * cleanPrice;
 
-  // 1. Get Profile
-  let { data: profile, error: pErr } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .single();
-
-  if (pErr || !profile) {
-    // Auto-create profile if missing
-    const newProfile = {
-      id: userId,
-      name: userName || 'Trader',
-      email: '',
-      participant_id: '',
-      cash: 200000.0,
-      role: 'student',
-    };
-    await supabase.from('profiles').upsert(newProfile);
-    profile = newProfile;
-  }
-
-  const currentCash = Number(profile.cash || 0);
-
-  // 2. Validate & Update Cash
-  if (type === 'buy') {
-    if (currentCash < totalValue) throw new Error('Insufficient Mudra Coins');
-    const { error: updErr } = await supabase
+  await acquireTradeLock(userId);
+  try {
+    // 1. Get Profile directly from DB
+    let { data: profile, error: pErr } = await supabase
       .from('profiles')
-      .update({ cash: currentCash - totalValue })
-      .eq('id', userId);
-    if (updErr) throw updErr;
-  } else {
-    // Sell: check holdings
-    const { data: holding } = await supabase
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (pErr || !profile) {
+      const newProfile = {
+        id: userId,
+        name: userName || 'Trader',
+        email: '',
+        participant_id: '',
+        cash: 200000.0,
+        role: 'student',
+      };
+      await supabase.from('profiles').upsert(newProfile);
+      profile = newProfile;
+    }
+
+    const currentCash = Number(profile.cash || 0);
+
+    // 2. Validate & Update Cash
+    if (type === 'buy') {
+      if (currentCash < totalValue) {
+        throw new Error(
+          `Insufficient Mudra Coins. Required: 🪙${totalValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}, Available: 🪙${currentCash.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+        );
+      }
+      const { error: updErr } = await supabase
+        .from('profiles')
+        .update({ cash: currentCash - totalValue, updated_at: new Date().toISOString() })
+        .eq('id', userId);
+      if (updErr) throw updErr;
+    } else {
+      // Sell: check holdings
+      const { data: holding } = await supabase
+        .from('holdings')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('ticker', ticker)
+        .maybeSingle();
+
+      if (!holding || Number(holding.quantity) < cleanQty) {
+        throw new Error(
+          `Insufficient shares to sell. You have ${holding?.quantity || 0} shares, trying to sell ${cleanQty}.`
+        );
+      }
+
+      const { error: updErr } = await supabase
+        .from('profiles')
+        .update({ cash: currentCash + totalValue, updated_at: new Date().toISOString() })
+        .eq('id', userId);
+      if (updErr) throw updErr;
+    }
+
+    // 3. Update Holdings with safe upsert
+    const { data: existingHolding } = await supabase
       .from('holdings')
       .select('*')
       .eq('user_id', userId)
       .eq('ticker', ticker)
-      .single();
+      .maybeSingle();
 
-    if (!holding || holding.quantity < quantity) {
-      throw new Error('Insufficient shares to sell');
-    }
+    if (type === 'buy') {
+      const prevQty = Number(existingHolding?.quantity || 0);
+      const prevAvg = Number(existingHolding?.avg_price || 0);
+      const newQty = prevQty + cleanQty;
+      const newAvg = (prevAvg * prevQty + totalValue) / newQty;
 
-    const { error: updErr } = await supabase
-      .from('profiles')
-      .update({ cash: currentCash + totalValue })
-      .eq('id', userId);
-    if (updErr) throw updErr;
-  }
-
-  // 3. Update Holdings
-  const { data: existingHolding } = await supabase
-    .from('holdings')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('ticker', ticker)
-    .single();
-
-  if (type === 'buy') {
-    if (existingHolding) {
-      const newQty = existingHolding.quantity + quantity;
-      const newAvg =
-        (Number(existingHolding.avg_price) * existingHolding.quantity +
-          totalValue) /
-        newQty;
-      await supabase
-        .from('holdings')
-        .update({
+      const { error: holdErr } = await supabase.from('holdings').upsert(
+        {
+          id: existingHolding?.id || undefined,
+          user_id: userId,
+          ticker,
           quantity: newQty,
           avg_price: newAvg,
           updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingHolding.id);
+        },
+        { onConflict: 'user_id,ticker' }
+      );
+      if (holdErr) throw holdErr;
     } else {
-      await supabase.from('holdings').insert({
-        user_id: userId,
-        ticker,
-        quantity,
-        avg_price: price,
-      });
+      const prevQty = Number(existingHolding?.quantity || 0);
+      const newQty = Math.max(0, prevQty - cleanQty);
+
+      if (existingHolding) {
+        const { error: holdErr } = await supabase
+          .from('holdings')
+          .update({
+            quantity: newQty,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingHolding.id);
+        if (holdErr) throw holdErr;
+      }
     }
-  } else {
-    const newQty = (existingHolding?.quantity || quantity) - quantity;
-    if (newQty <= 0) {
-      await supabase
-        .from('holdings')
-        .update({
-          quantity: 0,
-          avg_price: 0,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingHolding.id);
-    } else {
-      await supabase
-        .from('holdings')
-        .update({
-          quantity: newQty,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingHolding.id);
-    }
-  }
 
-  // 4. Log Trade
-  await supabase.from('trades').insert({
-    user_id: userId,
-    user_name: userName,
-    ticker,
-    type,
-    quantity,
-    price,
-    total_value: totalValue,
-  });
+    // 4. Log Trade
+    await supabase.from('trades').insert({
+      user_id: userId,
+      user_name: userName || profile.name || 'Trader',
+      ticker,
+      type,
+      quantity: cleanQty,
+      price: cleanPrice,
+      total_value: totalValue,
+    });
 
-  // 5. Update Stock Pending Volume
-  const { data: stockData } = await supabase
-    .from('stocks')
-    .select('buy_volume, sell_volume')
-    .eq('ticker', ticker)
-    .single();
-
-  if (stockData) {
-    const newBuy =
-      type === 'buy'
-        ? Number(stockData.buy_volume || 0) + totalValue
-        : Number(stockData.buy_volume || 0);
-    const newSell =
-      type === 'sell'
-        ? Number(stockData.sell_volume || 0) + totalValue
-        : Number(stockData.sell_volume || 0);
-
-    await supabase
+    // 5. Update Stock Pending Volume
+    const { data: stockData } = await supabase
       .from('stocks')
-      .update({ buy_volume: newBuy, sell_volume: newSell })
-      .eq('ticker', ticker);
+      .select('buy_volume, sell_volume')
+      .eq('ticker', ticker)
+      .maybeSingle();
+
+    if (stockData) {
+      const newBuy =
+        type === 'buy'
+          ? Number(stockData.buy_volume || 0) + totalValue
+          : Number(stockData.buy_volume || 0);
+      const newSell =
+        type === 'sell'
+          ? Number(stockData.sell_volume || 0) + totalValue
+          : Number(stockData.sell_volume || 0);
+
+      await supabase
+        .from('stocks')
+        .update({ buy_volume: newBuy, sell_volume: newSell })
+        .eq('ticker', ticker);
+    }
+  } finally {
+    releaseTradeLock(userId);
   }
+};
+
+// ─── ADMIN FUND MANAGEMENT ────────────────────────────────────────────────────
+export const adminUpdateUserCash = async (userId, newCashAmount) => {
+  const cleanAmount = Number(newCashAmount);
+  if (isNaN(cleanAmount) || cleanAmount < 0) {
+    throw new Error('Please enter a valid cash amount (0 or greater).');
+  }
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ cash: cleanAmount, updated_at: new Date().toISOString() })
+    .eq('id', userId);
+
+  if (error) throw error;
+  return cleanAmount;
+};
+
+export const adminResetUserPortfolio = async (userId, targetCash = 200000) => {
+  await adminUpdateUserCash(userId, targetCash);
+  await supabase.from('holdings').delete().eq('user_id', userId);
+  await supabase.from('commodity_holdings').delete().eq('user_id', userId);
+  await supabase.from('mf_holdings').delete().eq('user_id', userId);
+  await supabase
+    .from('savings')
+    .update({ status: 'cancelled' })
+    .eq('user_id', userId)
+    .eq('status', 'active');
+  return true;
 };
 
 // ─── HOLDINGS ─────────────────────────────────────────────────────────────────

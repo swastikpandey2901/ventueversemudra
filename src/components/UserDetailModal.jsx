@@ -1,5 +1,9 @@
-import { useEffect, useState } from 'react';
-import { getUserDetailedPortfolio } from '../supabase/api';
+import { useEffect, useState, useCallback } from 'react';
+import {
+  getUserDetailedPortfolio,
+  adminUpdateUserCash,
+  adminResetUserPortfolio,
+} from '../supabase/api';
 import MudraIcon from './MudraIcon';
 
 const UserDetailModal = ({ userId, onClose }) => {
@@ -7,6 +11,21 @@ const UserDetailModal = ({ userId, onClose }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('holdings'); // 'holdings' | 'trades'
+
+  // Admin Fund Control States
+  const [customCashInput, setCustomCashInput] = useState('');
+  const [fundActionLoading, setFundActionLoading] = useState(false);
+  const [fundMsg, setFundMsg] = useState('');
+
+  const reloadData = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await getUserDetailedPortfolio(userId);
+      setData(res);
+    } catch (err) {
+      setError(err.message || 'Failed to reload user details.');
+    }
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -38,6 +57,98 @@ const UserDetailModal = ({ userId, onClose }) => {
   const { profile = {}, valuation = {}, holdings = {}, trades = [] } = data || {};
   const isParticipant = (profile.participantId || '').startsWith('MUDRA');
   const isTester = (profile.participantId || '').startsWith('TRIAL');
+
+  const handleResetCash = async (target = 200000) => {
+    if (!window.confirm(`Reset ${profile.name}'s cash balance to 🪙${target.toLocaleString('en-IN')}?`)) return;
+    setFundActionLoading(true);
+    setFundMsg('');
+    try {
+      await adminUpdateUserCash(userId, target);
+      setFundMsg(`✅ Cash balance set to 🪙${target.toLocaleString('en-IN')}`);
+      await reloadData();
+    } catch (err) {
+      setFundMsg(`❌ ${err.message}`);
+    } finally {
+      setFundActionLoading(false);
+    }
+  };
+
+  const handleWipeAndReset = async () => {
+    if (
+      !window.confirm(
+        `Are you sure you want to WIPE all stock, metal, and fund holdings and reset ${profile.name} to starting 🪙2,00,000?`
+      )
+    )
+      return;
+    setFundActionLoading(true);
+    setFundMsg('');
+    try {
+      await adminResetUserPortfolio(userId, 200000);
+      setFundMsg(`✅ Portfolio wiped and reset to 🪙2,00,000!`);
+      await reloadData();
+    } catch (err) {
+      setFundMsg(`❌ ${err.message}`);
+    } finally {
+      setFundActionLoading(false);
+    }
+  };
+
+  const handleSetExactCash = async (val) => {
+    const num = Number(val);
+    if (isNaN(num) || num < 0) return setFundMsg('❌ Enter a valid positive number');
+    setFundActionLoading(true);
+    setFundMsg('');
+    try {
+      await adminUpdateUserCash(userId, num);
+      setFundMsg(`✅ Cash set to 🪙${num.toLocaleString('en-IN')}`);
+      setCustomCashInput('');
+      await reloadData();
+    } catch (err) {
+      setFundMsg(`❌ ${err.message}`);
+    } finally {
+      setFundActionLoading(false);
+    }
+  };
+
+  const handleAddFunds = async (val) => {
+    const num = Number(val);
+    if (isNaN(num) || num <= 0) return setFundMsg('❌ Enter an amount to add');
+    const newTotal = (valuation.cash || 0) + num;
+    setFundActionLoading(true);
+    setFundMsg('');
+    try {
+      await adminUpdateUserCash(userId, newTotal);
+      setFundMsg(
+        `✅ Added 🪙${num.toLocaleString('en-IN')}! New cash: 🪙${newTotal.toLocaleString('en-IN')}`
+      );
+      setCustomCashInput('');
+      await reloadData();
+    } catch (err) {
+      setFundMsg(`❌ ${err.message}`);
+    } finally {
+      setFundActionLoading(false);
+    }
+  };
+
+  const handleDeductFunds = async (val) => {
+    const num = Number(val);
+    if (isNaN(num) || num <= 0) return setFundMsg('❌ Enter an amount to deduct');
+    const newTotal = Math.max(0, (valuation.cash || 0) - num);
+    setFundActionLoading(true);
+    setFundMsg('');
+    try {
+      await adminUpdateUserCash(userId, newTotal);
+      setFundMsg(
+        `✅ Deducted 🪙${num.toLocaleString('en-IN')}! New cash: 🪙${newTotal.toLocaleString('en-IN')}`
+      );
+      setCustomCashInput('');
+      await reloadData();
+    } catch (err) {
+      setFundMsg(`❌ ${err.message}`);
+    } finally {
+      setFundActionLoading(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-sm animate-fade-in">
@@ -153,6 +264,96 @@ const UserDetailModal = ({ userId, onClose }) => {
                     <span>{valuation.netPnl >= 0 ? '+' : '-'}</span>
                     <MudraIcon className="w-4 h-4" />
                     {Math.abs(valuation.netPnl || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </div>
+                </div>
+              </div>
+
+              {/* God Admin Fund Management & Balance Reset */}
+              <div className="card bg-purple-950/20 border-purple-500/30 p-4 rounded-xl space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">⚡</span>
+                    <div>
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                        God Admin Fund Calibration
+                      </h4>
+                      <p className="text-[11px] text-mudra-muted">
+                        Calibrate, reward, or reset cash balance for this trader.
+                      </p>
+                    </div>
+                  </div>
+                  {fundMsg && (
+                    <span
+                      className={`text-xs font-bold px-2.5 py-1 rounded ${
+                        fundMsg.startsWith('✅')
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                          : 'bg-red-950 text-red-400 border border-red-800'
+                      }`}
+                    >
+                      {fundMsg}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  {/* Quick Resets */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      disabled={fundActionLoading}
+                      onClick={() => handleResetCash(200000)}
+                      className="btn-outline text-xs px-3 py-1.5 font-bold border-amber-500/40 text-amber-300 hover:bg-amber-500/10 flex items-center gap-1"
+                      title="Reset liquid cash back to 2,00,000"
+                    >
+                      🔄 Reset Cash to 🪙2,00,000
+                    </button>
+                    <button
+                      type="button"
+                      disabled={fundActionLoading}
+                      onClick={handleWipeAndReset}
+                      className="btn-outline text-xs px-3 py-1.5 font-bold border-red-500/40 text-red-400 hover:bg-red-500/10 flex items-center gap-1"
+                      title="Clear all holdings and reset cash to 2,00,000"
+                    >
+                      ⚠️ Wipe Portfolio & Reset
+                    </button>
+                  </div>
+
+                  {/* Custom Balance Input */}
+                  <div className="flex items-center gap-1.5 justify-start md:justify-end flex-wrap">
+                    <input
+                      type="number"
+                      placeholder="Amount..."
+                      value={customCashInput}
+                      onChange={(e) => setCustomCashInput(e.target.value)}
+                      className="input py-1 px-2.5 text-xs font-mono max-w-[110px]"
+                    />
+                    <button
+                      type="button"
+                      disabled={fundActionLoading || !customCashInput}
+                      onClick={() => handleSetExactCash(customCashInput)}
+                      className="btn-primary py-1 px-2.5 text-xs font-bold"
+                      title="Set exact cash amount"
+                    >
+                      Set Balance
+                    </button>
+                    <button
+                      type="button"
+                      disabled={fundActionLoading || !customCashInput}
+                      onClick={() => handleAddFunds(customCashInput)}
+                      className="btn-green py-1 px-2.5 text-xs font-bold"
+                      title="Add this amount as bonus"
+                    >
+                      + Add
+                    </button>
+                    <button
+                      type="button"
+                      disabled={fundActionLoading || !customCashInput}
+                      onClick={() => handleDeductFunds(customCashInput)}
+                      className="btn-red py-1 px-2.5 text-xs font-bold"
+                      title="Deduct this amount"
+                    >
+                      - Deduct
+                    </button>
                   </div>
                 </div>
               </div>

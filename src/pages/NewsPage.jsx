@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { subscribeNews } from '../supabase/api';
-import { SECTOR_COLORS } from '../data/companies';
+import { SECTOR_COLORS, COMPANIES } from '../data/companies';
 import { useAuth } from '../context/AuthContext';
+
+const VALID_TICKER_SET = new Set(COMPANIES.map((c) => c.ticker));
 
 const sentimentConfig = {
   positive: { color: 'text-mudra-green', bg: 'bg-emerald-950/20 border-emerald-700/30', icon: '📈', label: 'Bullish' },
@@ -191,23 +193,27 @@ const NewsPage = () => {
                   <p className="text-mudra-text/90 text-sm leading-relaxed mb-4">{news.body}</p>
                 )}
 
-                {/* Affected Stocks with Quick Trade Links */}
-                {news.tickers?.length > 0 && (
-                  <div className="flex items-center gap-2 flex-wrap border-t border-mudra-border/40 pt-3">
-                    <span className="text-xs text-mudra-muted">Affected Equities:</span>
-                    {news.tickers.map((t) => (
-                      <Link
-                        key={t}
-                        to={`/company/${t}`}
-                        className="text-xs font-mono font-bold px-2.5 py-1 rounded bg-mudra-bg border border-mudra-border hover:border-mudra-accent text-mudra-accent transition-all flex items-center gap-1"
-                        title={`View ${t} chart and trade`}
-                      >
-                        <span>{t}</span>
-                        <span className="text-[10px] text-mudra-muted">↗</span>
-                      </Link>
-                    ))}
-                  </div>
-                )}
+                {/* Affected Stocks with Quick Trade Links (Strictly 30 Mudra Equities) */}
+                {(() => {
+                  const validTickers = (news.tickers || []).filter((t) => VALID_TICKER_SET.has(t));
+                  if (validTickers.length === 0) return null;
+                  return (
+                    <div className="flex items-center gap-2 flex-wrap border-t border-mudra-border/40 pt-3">
+                      <span className="text-xs text-mudra-muted">Affected Equities:</span>
+                      {validTickers.map((t) => (
+                        <Link
+                          key={t}
+                          to={`/company/${t}`}
+                          className="text-xs font-mono font-bold px-2.5 py-1 rounded bg-mudra-bg border border-mudra-border hover:border-mudra-accent text-mudra-accent transition-all flex items-center gap-1"
+                          title={`View ${t} chart and trade`}
+                        >
+                          <span>{t}</span>
+                          <span className="text-[10px] text-mudra-muted">↗</span>
+                        </Link>
+                      ))}
+                    </div>
+                  );
+                })()}
 
                 {/* AI Reasoning */}
                 {news.aiReasoning && (

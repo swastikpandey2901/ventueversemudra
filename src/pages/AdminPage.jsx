@@ -25,6 +25,7 @@ import {
 import { COMPANIES } from '../data/companies';
 import { supabase } from '../supabase/client';
 import MudraIcon from '../components/MudraIcon';
+import UserDetailModal from '../components/UserDetailModal';
 
 const ADMIN_CASH = 99900000000; // 999 Crore
 
@@ -43,6 +44,9 @@ const AdminPage = () => {
   const [users, setUsers] = useState([]);
   const [activeTab, setActiveTab] = useState('market');
 
+  // God Admin User Portfolio Inspection & Fund Calibration Modal
+  const [inspectUserId, setInspectUserId] = useState(null);
+
   // Price engine
   const [engineRunning, setEngineRunning] = useState(false);
   const engineRef = useRef(null);
@@ -54,10 +58,14 @@ const AdminPage = () => {
   const [godType, setGodType] = useState('buy');
   const [godMsg, setGodMsg] = useState('');
 
-  // News
+  // News Publisher Controls
   const [newsText, setNewsText] = useState('');
   const [newsHeadline, setNewsHeadline] = useState('');
   const [newsBody, setNewsBody] = useState('');
+  const [selectedTickers, setSelectedTickers] = useState([]);
+  const [shockPercent, setShockPercent] = useState(0);
+  const [sentiment, setSentiment] = useState('neutral');
+  const [newsSectorFilter, setNewsSectorFilter] = useState('ALL');
   const [aiResult, setAiResult] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [newsPublishing, setNewsPublishing] = useState(false);
@@ -170,7 +178,7 @@ const AdminPage = () => {
     }
   };
 
-  // AI News Analyze
+  // AI / Built-in News Analyze
   const handleAnalyze = async () => {
     if (!newsText.trim()) return;
     setAiLoading(true);
@@ -179,7 +187,16 @@ const AdminPage = () => {
     try {
       const result = await analyzeNews(newsText);
       setAiResult(result);
-      setNewsHeadline(result.headline || '');
+      if (result.headline) setNewsHeadline(result.headline);
+      if (Array.isArray(result.affectedTickers) && result.affectedTickers.length > 0) {
+        setSelectedTickers(result.affectedTickers);
+      }
+      if (typeof result.shockPercent === 'number') {
+        setShockPercent(result.shockPercent);
+      }
+      if (result.sentiment) {
+        setSentiment(result.sentiment);
+      }
     } catch (err) {
       setNewsMsg(`❌ ${err.message}`);
     } finally {
@@ -189,34 +206,43 @@ const AdminPage = () => {
 
   // Publish News
   const handlePublishNews = async () => {
-    if (!aiResult && !newsHeadline)
-      return setNewsMsg('❌ Analyze news first or enter headline manually');
+    const finalHeadline = newsHeadline.trim() || aiResult?.headline?.trim();
+    if (!finalHeadline) {
+      return setNewsMsg('❌ Please enter a headline or click Analyze');
+    }
+    if (selectedTickers.length === 0) {
+      return setNewsMsg('❌ Please select at least one affected stock');
+    }
     setNewsPublishing(true);
     try {
-      const shockPercent = aiResult?.shockPercent || 0;
-      const tickers = aiResult?.affectedTickers || [];
+      const finalShock = Number(shockPercent) || 0;
       const shockAt = Date.now() + 5 * 60 * 1000;
 
       await publishNews({
-        headline: newsHeadline || aiResult?.headline,
+        headline: finalHeadline,
         body: newsBody || newsText,
-        tickers,
-        sentiment: aiResult?.sentiment || 'neutral',
-        shockPercent,
-        aiReasoning: aiResult?.reasoning || '',
+        tickers: selectedTickers,
+        sentiment: sentiment || 'neutral',
+        shockPercent: finalShock,
+        aiReasoning: aiResult?.reasoning || `Manual news release targeting ${selectedTickers.join(', ')}`,
         appliedAt: shockAt,
         engine: aiResult?.engine || 'manual',
       });
 
       // Schedule price shock
-      if (tickers.length > 0 && shockPercent !== 0) {
-        await scheduleNewsShock(tickers, shockPercent);
+      if (selectedTickers.length > 0 && finalShock !== 0) {
+        await scheduleNewsShock(selectedTickers, finalShock);
       }
 
-      setNewsMsg(`✅ News published! Market will react in 5 minutes.`);
+      setNewsMsg(
+        `✅ News published! Market will react with ${finalShock > 0 ? '+' : ''}${finalShock}% on [${selectedTickers.join(', ')}] in 5 minutes.`
+      );
       setNewsText('');
       setNewsHeadline('');
       setNewsBody('');
+      setSelectedTickers([]);
+      setShockPercent(0);
+      setSentiment('neutral');
       setAiResult(null);
     } catch (err) {
       setNewsMsg(`❌ ${err.message}`);
@@ -495,18 +521,28 @@ const AdminPage = () => {
 
       {/* ── NEWS PUBLISHER ── */}
       {activeTab === 'news' && (
-        <div className="grid md:grid-cols-2 gap-6">
-          <div className="card">
-            <h2 className="font-bold text-mudra-gold mb-4">📰 AI News Publisher</h2>
+        <div className="grid lg:grid-cols-12 gap-6">
+          <div className="lg:col-span-7 card space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-bold text-mudra-gold text-lg">📰 News & Market Shock Publisher</h2>
+                <p className="text-xs text-mudra-muted">
+                  Publish market news to move the 30 Mudra stocks. Works 100% autonomously without external API keys.
+                </p>
+              </div>
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-500/30">
+                ⚡ 5-Min Reaction Timer
+              </span>
+            </div>
 
             <div className="space-y-3">
               <div>
                 <label className="text-xs text-mudra-muted block mb-1">
-                  Paste news (Instagram/YouTube caption or text)
+                  News Text or Social Caption (Paste from Instagram / YouTube / Press Release)
                 </label>
                 <textarea
-                  className="input min-h-[120px] resize-y"
-                  placeholder="Paste the full news text here..."
+                  className="input min-h-[90px] resize-y text-sm"
+                  placeholder="e.g. State Bank of Mudra reports massive Q3 profit growth; RBI cuts repo rates boost banking sector..."
                   value={newsText}
                   onChange={(e) => setNewsText(e.target.value)}
                 />
@@ -515,88 +551,278 @@ const AdminPage = () => {
               <button
                 onClick={handleAnalyze}
                 disabled={aiLoading || !newsText.trim()}
-                className="btn-primary w-full"
+                className="btn-primary w-full py-2.5 flex items-center justify-center gap-2"
               >
-                {aiLoading ? '🤖 Analyzing...' : '🤖 Analyze with AI'}
+                {aiLoading ? (
+                  <span>🤖 Analyzing News & Detecting Affected Stocks...</span>
+                ) : (
+                  <span>🤖 Auto-Detect Affected Stocks & Sentiment</span>
+                )}
               </button>
 
-              {/* AI Result */}
+              {/* AI / Engine Result Banner */}
               {aiResult && (
-                <div className="bg-mudra-bg rounded-lg p-3 border border-mudra-border space-y-2">
-                  <div className="text-xs text-mudra-accent font-semibold">
-                    AI Suggestion ({aiResult.engine})
-                  </div>
-                  <div className="text-sm">
-                    <span className="text-mudra-muted">Stocks: </span>
-                    <span className="text-white font-mono">
-                      {aiResult.affectedTickers?.join(', ')}
+                <div className="bg-mudra-bg rounded-xl p-3.5 border border-mudra-border space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-mudra-gold flex items-center gap-1">
+                      <span>⚡ Engine:</span>
+                      <span className="text-white font-mono uppercase bg-mudra-card px-1.5 py-0.5 rounded border border-mudra-border">
+                        {aiResult.engine}
+                      </span>
+                    </span>
+                    <span className="text-mudra-muted text-[11px]">
+                      {aiResult.engine === 'built-in' ? 'Zero-Key Autonomous Parser' : 'Cloud LLM'}
                     </span>
                   </div>
-                  <div className="text-sm">
-                    <span className="text-mudra-muted">Sentiment: </span>
-                    <span
-                      className={
-                        aiResult.sentiment === 'positive'
-                          ? 'text-mudra-green'
-                          : aiResult.sentiment === 'negative'
-                          ? 'text-mudra-red'
-                          : 'text-mudra-gold'
-                      }
-                    >
-                      {aiResult.sentiment}
+
+                  <div className="text-xs flex items-center gap-2 flex-wrap">
+                    <span className="text-mudra-muted">Suggested Stocks:</span>
+                    <span className="text-white font-mono font-bold">
+                      {aiResult.affectedTickers?.length > 0
+                        ? aiResult.affectedTickers.join(', ')
+                        : 'None auto-detected (pick manually below)'}
                     </span>
                   </div>
-                  <div className="text-sm">
-                    <span className="text-mudra-muted">Shock: </span>
-                    <span
-                      className={`font-mono font-bold ${
-                        aiResult.shockPercent > 0 ? 'text-mudra-green' : 'text-mudra-red'
-                      }`}
-                    >
-                      {aiResult.shockPercent > 0 ? '+' : ''}
-                      {aiResult.shockPercent}%
-                    </span>
+
+                  <div className="text-xs text-mudra-muted italic bg-mudra-card/50 p-2 rounded border border-mudra-border/40">
+                    "{aiResult.reasoning}"
                   </div>
-                  <div className="text-xs text-mudra-muted italic">{aiResult.reasoning}</div>
                 </div>
               )}
 
-              {/* Headline override */}
+              {/* Headline & Body Inputs */}
               <div>
                 <label className="text-xs text-mudra-muted block mb-1">
-                  Headline (edit if needed)
+                  Headline <span className="text-mudra-red">*</span>
                 </label>
                 <input
                   className="input text-sm"
                   value={newsHeadline}
                   onChange={(e) => setNewsHeadline(e.target.value)}
-                  placeholder="News headline for students..."
-                />
-              </div>
-              <div>
-                <label className="text-xs text-mudra-muted block mb-1">Body text (optional)</label>
-                <textarea
-                  className="input text-sm min-h-[60px]"
-                  value={newsBody}
-                  onChange={(e) => setNewsBody(e.target.value)}
-                  placeholder="Additional context..."
+                  placeholder="e.g. Banking Stocks Surge on RBI Liquidity Boost"
                 />
               </div>
 
+              <div>
+                <label className="text-xs text-mudra-muted block mb-1">Detailed Story / Body (Optional)</label>
+                <textarea
+                  className="input text-xs min-h-[50px]"
+                  value={newsBody}
+                  onChange={(e) => setNewsBody(e.target.value)}
+                  placeholder="Additional context or full news body for students..."
+                />
+              </div>
+
+              {/* ── 30-Stock Visual Selector Chips ── */}
+              <div className="border-t border-mudra-border/60 pt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-white">Target Mudra Stocks</span>
+                    <span className="text-[11px] font-mono font-bold bg-mudra-accent/20 text-mudra-accent px-2 py-0.2 rounded-full">
+                      {selectedTickers.length} selected
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const visible = (newsSectorFilter === 'ALL'
+                          ? COMPANIES
+                          : COMPANIES.filter((c) => c.sector === newsSectorFilter)
+                        ).map((c) => c.ticker);
+                        setSelectedTickers((prev) => Array.from(new Set([...prev, ...visible])));
+                      }}
+                      className="text-mudra-accent hover:underline text-[11px]"
+                    >
+                      + Add All Visible
+                    </button>
+                    <span className="text-mudra-muted">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTickers([])}
+                      className="text-mudra-muted hover:text-white text-[11px]"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sector filter pills */}
+                <div className="flex gap-1 flex-wrap mb-2">
+                  {['ALL', ...Array.from(new Set(COMPANIES.map((c) => c.sector).filter(Boolean)))].map((sec) => (
+                    <button
+                      key={sec}
+                      type="button"
+                      onClick={() => setNewsSectorFilter(sec)}
+                      className={`text-[10px] px-2 py-0.5 rounded-full transition-all ${
+                        newsSectorFilter === sec
+                          ? 'bg-mudra-gold text-black font-bold'
+                          : 'bg-mudra-bg border border-mudra-border/60 text-mudra-muted hover:text-white'
+                      }`}
+                    >
+                      {sec}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Chips Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-[170px] overflow-y-auto p-2 bg-mudra-bg/80 rounded-xl border border-mudra-border/60">
+                  {COMPANIES.filter((c) => newsSectorFilter === 'ALL' || c.sector === newsSectorFilter).map((comp) => {
+                    const isSelected = selectedTickers.includes(comp.ticker);
+                    return (
+                      <button
+                        key={comp.ticker}
+                        type="button"
+                        onClick={() => {
+                          if (isSelected) {
+                            setSelectedTickers(selectedTickers.filter((t) => t !== comp.ticker));
+                          } else {
+                            setSelectedTickers([...selectedTickers, comp.ticker]);
+                          }
+                        }}
+                        className={`flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all border text-left ${
+                          isSelected
+                            ? 'bg-amber-500/20 border-mudra-gold text-white font-bold shadow'
+                            : 'bg-mudra-card/50 border-mudra-border/40 text-mudra-muted hover:border-mudra-border hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span>{comp.logo || '📈'}</span>
+                          <span className="font-mono">{comp.ticker}</span>
+                        </div>
+                        {isSelected ? (
+                          <span className="text-mudra-gold text-[11px] font-bold">✓</span>
+                        ) : (
+                          <span className="text-[10px] text-mudra-muted/60">{comp.sector}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ── Sentiment & Market Shock Impact Controls ── */}
+              <div className="border-t border-mudra-border/60 pt-3 space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-mudra-muted block mb-1">Market Sentiment</label>
+                    <div className="flex gap-1">
+                      {[
+                        { id: 'positive', label: '📈 Bullish' },
+                        { id: 'neutral', label: '⚖️ Neutral' },
+                        { id: 'negative', label: '📉 Bearish' },
+                      ].map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setSentiment(s.id)}
+                          className={`flex-1 py-1 text-xs rounded-lg font-semibold border transition-all ${
+                            sentiment === s.id
+                              ? s.id === 'positive'
+                                ? 'bg-mudra-green text-black border-mudra-green'
+                                : s.id === 'negative'
+                                ? 'bg-mudra-red text-white border-mudra-red'
+                                : 'bg-mudra-gold text-black border-mudra-gold'
+                              : 'bg-mudra-bg border-mudra-border text-mudra-muted hover:text-white'
+                          }`}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="text-xs text-mudra-muted">Shock Magnitude (%)</label>
+                      <span
+                        className={`text-xs font-mono font-bold ${
+                          shockPercent > 0
+                            ? 'text-mudra-green'
+                            : shockPercent < 0
+                            ? 'text-mudra-red'
+                            : 'text-mudra-gold'
+                        }`}
+                      >
+                        {shockPercent > 0 ? '+' : ''}
+                        {shockPercent}%
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min="-25"
+                        max="25"
+                        step="1"
+                        value={shockPercent}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          setShockPercent(val);
+                          if (val > 0) setSentiment('positive');
+                          else if (val < 0) setSentiment('negative');
+                        }}
+                        className="flex-1 accent-mudra-gold cursor-pointer"
+                      />
+                      <input
+                        type="number"
+                        min="-25"
+                        max="25"
+                        value={shockPercent}
+                        onChange={(e) => setShockPercent(Number(e.target.value))}
+                        className="input w-16 text-center text-xs py-1 px-1 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Presets */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] text-mudra-muted">Quick Shocks:</span>
+                  {[
+                    { label: '+15% Rally', val: 15, sent: 'positive' },
+                    { label: '+7% Up', val: 7, sent: 'positive' },
+                    { label: '0% Flat', val: 0, sent: 'neutral' },
+                    { label: '-7% Down', val: -7, sent: 'negative' },
+                    { label: '-15% Crash', val: -15, sent: 'negative' },
+                  ].map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => {
+                        setShockPercent(p.val);
+                        setSentiment(p.sent);
+                      }}
+                      className={`text-[11px] px-2 py-0.5 rounded border transition-all ${
+                        shockPercent === p.val
+                          ? 'bg-mudra-gold/20 border-mudra-gold text-mudra-gold font-bold'
+                          : 'bg-mudra-bg border-mudra-border text-mudra-muted hover:text-white'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Publish Action Button */}
               <button
                 onClick={handlePublishNews}
-                disabled={newsPublishing || (!aiResult && !newsHeadline)}
-                className="btn-green w-full py-3"
+                disabled={newsPublishing || (!newsHeadline && !aiResult)}
+                className="btn-green w-full py-3 font-bold text-base mt-2 shadow-lg"
               >
-                {newsPublishing ? 'Publishing...' : '🚀 Publish News (5-min delay)'}
+                {newsPublishing
+                  ? 'Publishing to Market...'
+                  : `🚀 Publish News (${selectedTickers.length} stocks | ${
+                      shockPercent > 0 ? '+' : ''
+                    }${shockPercent}%)`}
               </button>
 
               {newsMsg && (
                 <div
-                  className={`text-sm rounded p-2 ${
+                  className={`text-sm rounded-lg p-2.5 font-semibold ${
                     newsMsg.startsWith('✅')
-                      ? 'text-mudra-green bg-emerald-900/20'
-                      : 'text-mudra-red bg-red-900/20'
+                      ? 'text-mudra-green bg-emerald-950/40 border border-emerald-500/30'
+                      : 'text-mudra-red bg-red-950/40 border border-red-500/30'
                   }`}
                 >
                   {newsMsg}
@@ -605,38 +831,58 @@ const AdminPage = () => {
             </div>
           </div>
 
-          <div className="card">
-            <h3 className="font-bold text-white mb-3">How it works</h3>
-            <ol className="space-y-3 text-sm text-mudra-muted">
-              <li className="flex gap-2">
-                <span className="text-mudra-accent font-bold">1.</span> Copy news text from your
-                Instagram or YouTube post
-              </li>
-              <li className="flex gap-2">
-                <span className="text-mudra-accent font-bold">2.</span> Paste it above and click
-                "Analyze with AI"
-              </li>
-              <li className="flex gap-2">
-                <span className="text-mudra-accent font-bold">3.</span> Claude AI detects affected
-                stocks, sentiment and shock %
-              </li>
-              <li className="flex gap-2">
-                <span className="text-mudra-accent font-bold">4.</span> Review the suggestion — edit
-                headline if needed
-              </li>
-              <li className="flex gap-2">
-                <span className="text-mudra-accent font-bold">5.</span> Click Publish → news goes live
-                on the website instantly
-              </li>
-              <li className="flex gap-2">
-                <span className="text-mudra-accent font-bold">6.</span> Students have 5 minutes to
-                react before prices move
-              </li>
-            </ol>
-            <div className="mt-4 text-xs text-mudra-muted border-t border-mudra-border pt-3">
-              🤖 Using <strong className="text-white">Claude</strong> as primary AI. Falls back to{' '}
-              <strong className="text-white">Groq (Llama 3)</strong> automatically if Claude quota is
-              low.
+          {/* Right Information & Engine Guide */}
+          <div className="lg:col-span-5 space-y-4">
+            <div className="card space-y-3">
+              <h3 className="font-bold text-white flex items-center gap-2">
+                <span>🤖</span> Autonomous Built-In News Engine
+              </h3>
+              <p className="text-xs text-mudra-muted leading-relaxed">
+                No external API key is needed! Mudra comes equipped with an internal financial intelligence analyzer that scans keywords, detects sectors, assigns sentiment, and strictly restricts target tickers to our 30 official stocks.
+              </p>
+              <div className="p-3 bg-mudra-bg rounded-lg border border-mudra-border/60 text-xs space-y-2">
+                <div className="font-semibold text-mudra-gold">How News Moves the Market:</div>
+                <div className="flex gap-2">
+                  <span className="font-bold text-mudra-accent">1.</span>
+                  <span className="text-mudra-muted">
+                    News is published instantly to the student News Feed and ticker marquee.
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="font-bold text-mudra-accent">2.</span>
+                  <span className="text-mudra-muted">
+                    A <strong>5-minute countdown</strong> begins, giving participants time to read and trade ahead of the price shock.
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="font-bold text-mudra-accent">3.</span>
+                  <span className="text-mudra-muted">
+                    After 5 minutes, the scheduled price shock triggers, moving target stock prices by your configured percentage.
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="card space-y-2.5">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-white text-xs uppercase tracking-wider">
+                  Official 30 Mudra Companies
+                </h4>
+                <span className="text-[11px] font-mono text-mudra-muted">30 Stocks</span>
+              </div>
+              <p className="text-[11px] text-mudra-muted">
+                Only these 30 official companies exist in the tournament. News published here strictly effects these tickers:
+              </p>
+              <div className="flex flex-wrap gap-1 max-h-[160px] overflow-y-auto p-1.5 bg-mudra-bg rounded-lg border border-mudra-border/40">
+                {COMPANIES.map((c) => (
+                  <span
+                    key={c.ticker}
+                    className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-mudra-card border border-mudra-border/50 text-white"
+                  >
+                    {c.ticker}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -974,19 +1220,55 @@ const AdminPage = () => {
       {/* ── LEADERBOARD ── */}
       {activeTab === 'board' && (
         <div className="card">
-          <h2 className="font-bold text-white mb-4">Live Leaderboard</h2>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="font-bold text-white text-lg">🏆 Live Leaderboard ({board.length})</h2>
+              <p className="text-xs text-mudra-muted">Click any player to inspect portfolio and calibrate funds</p>
+            </div>
+            <span className="text-xs font-mono text-mudra-gold bg-mudra-gold/10 border border-mudra-gold/30 px-2.5 py-1 rounded-lg">
+              Admin Inspection Active
+            </span>
+          </div>
           <div className="space-y-1">
             {board.map((entry, i) => (
               <div
                 key={entry.uid}
-                className="flex items-center justify-between py-2 border-b border-mudra-border/50 text-sm"
+                onClick={() => setInspectUserId(entry.uid)}
+                className="flex items-center justify-between py-2.5 px-3 rounded-lg border border-transparent hover:border-mudra-border hover:bg-mudra-bg/60 cursor-pointer transition-all text-sm group"
               >
-                <span className="text-mudra-muted w-8">#{i + 1}</span>
-                <span className="text-white font-semibold flex-1">{entry.name}</span>
-                <span className="text-mudra-muted text-xs w-24">{entry.participantId}</span>
-                <span className="font-mono font-bold text-white flex items-center gap-0.5">
-                  <MudraIcon className="w-3.5 h-3.5" />{(entry.totalValue || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                </span>
+                <span className="text-mudra-muted w-8 font-bold">#{i + 1}</span>
+                <div className="flex-1 min-w-0 pr-2">
+                  <div className="text-white font-semibold flex items-center gap-2">
+                    <span className="truncate">{entry.name}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                        entry.isTester
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : entry.isAdmin
+                          ? 'bg-purple-500/20 text-purple-300'
+                          : 'bg-emerald-500/20 text-emerald-300'
+                      }`}
+                    >
+                      {entry.isAdmin ? 'Admin' : entry.isTester ? 'Tester' : 'Participant'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-mudra-muted font-mono">{entry.participantId || '—'}</div>
+                </div>
+                <div className="text-right flex items-center gap-3">
+                  <span className="font-mono font-bold text-white flex items-center gap-0.5 text-sm">
+                    <MudraIcon className="w-3.5 h-3.5" />
+                    {(entry.totalValue || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setInspectUserId(entry.uid);
+                    }}
+                    className="btn-outline text-xs py-1 px-2.5 text-mudra-gold border-mudra-gold/30 group-hover:border-mudra-gold font-bold"
+                  >
+                    ⚙️ Calibrate
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -996,29 +1278,70 @@ const AdminPage = () => {
       {/* ── PLAYERS ── */}
       {activeTab === 'players' && (
         <div className="card">
-          <h2 className="font-bold text-white mb-4">
-            Registered Players ({users.filter((u) => u.role !== 'admin').length})
-          </h2>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="font-bold text-white text-lg">
+                👥 Registered Players & Testers ({users.filter((u) => u.role !== 'admin').length})
+              </h2>
+              <p className="text-xs text-mudra-muted">
+                God Admin controls — inspect live portfolio, grant funds, deduct excess profit, or 1-click reset accounts.
+              </p>
+            </div>
+            <button
+              onClick={() => getAllUsers().then(setUsers)}
+              className="btn-outline text-xs px-3 py-1.5 font-semibold text-mudra-gold border-mudra-gold/30 hover:bg-mudra-gold/10 shrink-0"
+            >
+              🔄 Refresh List
+            </button>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-mudra-muted text-xs border-b border-mudra-border">
                 <tr>
-                  <th className="text-left pb-2">Name</th>
-                  <th className="text-left pb-2">Email</th>
+                  <th className="text-left pb-2">Name & Email</th>
                   <th className="text-left pb-2">Participant ID</th>
-                  <th className="text-right pb-2">Cash</th>
+                  <th className="text-left pb-2">Type</th>
+                  <th className="text-right pb-2">Cash Balance</th>
+                  <th className="text-right pb-2">God Controls</th>
                 </tr>
               </thead>
               <tbody>
                 {users
                   .filter((u) => u.role !== 'admin')
                   .map((u) => (
-                    <tr key={u.uid} className="border-b border-mudra-border/50">
-                      <td className="py-2 text-white font-semibold">{u.name}</td>
-                      <td className="py-2 text-mudra-muted">{u.email}</td>
-                      <td className="py-2 text-mudra-muted">{u.participantId || '—'}</td>
-                      <td className="py-2 text-right font-mono text-mudra-green flex items-center justify-end gap-0.5">
-                        <MudraIcon className="w-3 h-3" />{(u.cash || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    <tr
+                      key={u.uid || u.id}
+                      className="border-b border-mudra-border/50 hover:bg-mudra-bg/50 transition-colors"
+                    >
+                      <td className="py-2.5 text-white font-semibold">
+                        <div>{u.name}</div>
+                        <div className="text-[11px] text-mudra-muted font-normal">{u.email}</div>
+                      </td>
+                      <td className="py-2.5 text-mudra-muted font-mono">{u.participantId || '—'}</td>
+                      <td className="py-2.5">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            (u.participantId || '').startsWith('TRIAL')
+                              ? 'bg-amber-500/20 text-amber-300'
+                              : 'bg-emerald-500/20 text-emerald-300'
+                          }`}
+                        >
+                          {(u.participantId || '').startsWith('TRIAL') ? 'Tester' : 'Participant'}
+                        </span>
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-mudra-green font-bold">
+                        <div className="flex items-center justify-end gap-1">
+                          <MudraIcon className="w-3.5 h-3.5" />
+                          {(u.cash || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                        </div>
+                      </td>
+                      <td className="py-2.5 text-right">
+                        <button
+                          onClick={() => setInspectUserId(u.uid || u.id)}
+                          className="btn-outline text-xs py-1 px-3 font-bold text-mudra-gold border-mudra-gold/40 hover:bg-mudra-gold/20"
+                        >
+                          ⚙️ Manage & Calibrate
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -1078,6 +1401,17 @@ const AdminPage = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Admin Deep-Dive User Inspector & Fund Calibration Modal */}
+      {inspectUserId && (
+        <UserDetailModal
+          userId={inspectUserId}
+          onClose={() => {
+            setInspectUserId(null);
+            getAllUsers().then(setUsers);
+          }}
+        />
       )}
     </div>
   );
