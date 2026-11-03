@@ -38,26 +38,36 @@ export const runPriceCycle = async () => {
       // 2. Check AI Dynamic Target Shift OR pending news shock
       let newPrice;
       let clearShock = false;
+      const shockAtNum = Number(stock.pending_shock_at);
+      const isTargetShift = stock.pending_shock !== null && (shockAtNum < 0 || shockAtNum === 1);
 
-      if (stock.pending_shock !== null && Number(stock.pending_shock_at) === 1) {
-        // Mode B: AI Dynamic Target Shift
+      if (isTargetShift) {
+        // Mode B: AI Dynamic Target Shift towards target price by deadline
         const targetPrice = Number(stock.pending_shock);
+        // If shockAtNum < 0, deadline is Math.abs(shockAtNum), otherwise fallback to 5 minutes
+        const targetDeadline = shockAtNum < 0 ? Math.abs(shockAtNum) : (now + 5 * 60 * 1000);
+        const remainingMs = targetDeadline - now;
         const diff = targetPrice - currentPrice;
-        if (Math.abs(diff) <= 0.35 || Math.abs(diff) / currentPrice < 0.003) {
-          // Reached target within 0.3%! Snap to target and complete the shift
+
+        // If time is up, or diff is within 0.35 or 0.3%
+        if (remainingMs <= 10000 || Math.abs(diff) <= 0.35 || (Math.abs(diff) / currentPrice) < 0.003) {
+          // Snap directly to target upon reaching deadline/price
           newPrice = targetPrice;
           clearShock = true;
         } else {
-          // Move ~22% closer to target each cycle with realistic micro-volatility
-          const driftStep = diff * 0.22;
+          // Calculate cycles remaining based on remaining time (each cycle is ~30s)
+          const cyclesRemaining = Math.max(1, Math.round(remainingMs / 30000));
+          // Move exactly a proportional step towards the target
+          const driftStep = diff / cyclesRemaining;
+          // Add subtle organic micro-volatility (±0.25% market noise)
           const microJitter = (Math.random() - 0.49) * 0.003 * currentPrice;
           newPrice = Math.max(1, parseFloat((currentPrice + driftStep + microJitter).toFixed(2)));
         }
       } else {
         // Standard Market Order Flow + News Shock:
         let shockImpact = 0;
-        if (stock.pending_shock !== null && stock.pending_shock_at) {
-          if (now >= Number(stock.pending_shock_at)) {
+        if (stock.pending_shock !== null && stock.pending_shock_at && shockAtNum > 1) {
+          if (now >= shockAtNum) {
             shockImpact = Number(stock.pending_shock) / 100;
             clearShock = true;
           }
@@ -288,22 +298,45 @@ export const godSetStockPrice = async (ticker, newPrice) => {
   return cleanPrice;
 };
 
-// Mode B: Move to Target (Dynamic AI Shift over cycles)
-export const godMoveToTargetPrice = async (ticker, targetPrice) => {
+// Mode B: Move to Target (Dynamic AI Shift over specified duration or target time)
+export const godMoveToTargetPrice = async (ticker, targetPrice, durationMinutesOrTime = 10) => {
   const cleanTarget = Math.max(1, parseFloat(Number(targetPrice).toFixed(2)));
   if (isNaN(cleanTarget)) throw new Error('Please enter a valid target price.');
+
+  const now = Date.now();
+  let targetTimestamp;
+
+  if (typeof durationMinutesOrTime === 'string' && durationMinutesOrTime.includes(':')) {
+    // Exact time string like "14:30" or "22:15"
+    const [hh, mm] = durationMinutesOrTime.split(':').map(Number);
+    const d = new Date();
+    d.setHours(hh, mm, 0, 0);
+    if (d.getTime() <= now) {
+      d.setDate(d.getDate() + 1); // If time has passed today, assume tomorrow
+    }
+    targetTimestamp = d.getTime();
+  } else {
+    // Numeric minutes (or millisecond timestamp)
+    const val = Number(durationMinutesOrTime);
+    if (val > 1000000000000) {
+      targetTimestamp = val;
+    } else {
+      const minutes = Math.max(1, isNaN(val) ? 10 : val);
+      targetTimestamp = now + minutes * 60 * 1000;
+    }
+  }
 
   const { error } = await supabase
     .from('stocks')
     .update({
       pending_shock: cleanTarget,
-      pending_shock_at: 1, // Sentinel indicating active AI Target Shift
+      pending_shock_at: -targetTimestamp, // Negative timestamp stores target reach deadline!
       updated_at: new Date().toISOString(),
     })
     .eq('ticker', ticker);
 
   if (error) throw error;
-  return cleanTarget;
+  return { targetPrice: cleanTarget, targetTimestamp };
 };
 
 // Cancel AI Target Shift

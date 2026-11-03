@@ -74,6 +74,16 @@ const AdminPage = () => {
   const [overrideTicker, setOverrideTicker] = useState('');
   const [overridePrice, setOverridePrice] = useState('');
   const [overrideMsg, setOverrideMsg] = useState('');
+  const [targetDurationMinutes, setTargetDurationMinutes] = useState('10');
+  const [targetTimeMode, setTargetTimeMode] = useState('duration'); // 'duration' | 'exact_time'
+  const [targetExactTime, setTargetExactTime] = useState('');
+  const [clock, setClock] = useState(Date.now());
+
+  // Clock tick every 3s to keep countdowns accurate
+  useEffect(() => {
+    const timer = setInterval(() => setClock(Date.now()), 3000);
+    return () => clearInterval(timer);
+  }, []);
 
   // God Quick Player Fund Calibrator
   const [quickPlayerId, setQuickPlayerId] = useState('');
@@ -212,8 +222,15 @@ const AdminPage = () => {
         await godSetStockPrice(overrideTicker, price);
         setOverrideMsg(`⚡ [DIRECT SET] ${overrideTicker} price overridden to 🪙${price.toFixed(2)} instantly!`);
       } else {
-        await godMoveToTargetPrice(overrideTicker, price);
-        setOverrideMsg(`🤖 [MOVE TO TARGET] ${overrideTicker} target set to 🪙${price.toFixed(2)}. AI will now dynamically shift the price smoothly towards 🪙${price.toFixed(2)} with organic market drift!`);
+        const timeVal = targetTimeMode === 'exact_time' ? targetExactTime : Number(targetDurationMinutes);
+        if (targetTimeMode === 'exact_time' && !targetExactTime) {
+          throw new Error('Please pick an exact target reach time.');
+        }
+        const res = await godMoveToTargetPrice(overrideTicker, price, timeVal);
+        const reachTimeStr = res.targetTimestamp
+          ? new Date(res.targetTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : `${targetDurationMinutes} min`;
+        setOverrideMsg(`🤖 [MOVE TO TARGET] ${overrideTicker} target set to 🪙${price.toFixed(2)} (Reach by ${reachTimeStr}). AI will dynamically shift the price smoothly cycle-by-cycle!`);
       }
       setOverridePrice('');
     } catch (err) {
@@ -660,7 +677,8 @@ const AdminPage = () => {
                   >
                     <option value="">-- Choose company --</option>
                     {stocks.map((s) => {
-                      const isDrifting = Number(s.pendingShockAt) === 1;
+                      const shockAtNum = Number(s.pendingShockAt);
+                      const isDrifting = s.pendingShock !== null && (shockAtNum < 0 || shockAtNum === 1);
                       return (
                         <option key={s.ticker} value={s.ticker}>
                           {s.ticker} – {s.name} (Now: 🪙{s.currentPrice?.toFixed(2)}){isDrifting ? ` 🤖 [Target: 🪙${s.pendingShock}]` : ''}
@@ -717,6 +735,146 @@ const AdminPage = () => {
                   )}
                 </div>
 
+                {/* ⏱️ Timing Configuration (Only when priceSetMode is 'move') */}
+                {priceSetMode === 'move' && (
+                  <div className="space-y-2 bg-purple-950/20 border border-purple-500/20 rounded-xl p-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-purple-200 flex items-center gap-1.5">
+                        <span>⏱️</span> Target Reach Timing
+                      </label>
+                      <div className="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-purple-500/30">
+                        <button
+                          type="button"
+                          onClick={() => setTargetTimeMode('duration')}
+                          className={`px-2 py-0.5 text-[11px] rounded font-medium transition-all ${
+                            targetTimeMode === 'duration'
+                              ? 'bg-mudra-accent text-white shadow'
+                              : 'text-mudra-muted hover:text-white'
+                          }`}
+                        >
+                          Duration (Mins)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTargetTimeMode('exact_time');
+                            if (!targetExactTime) {
+                              const d = new Date(Date.now() + 15 * 60 * 1000);
+                              const hh = String(d.getHours()).padStart(2, '0');
+                              const mm = String(d.getMinutes()).padStart(2, '0');
+                              setTargetExactTime(`${hh}:${mm}`);
+                            }
+                          }}
+                          className={`px-2 py-0.5 text-[11px] rounded font-medium transition-all ${
+                            targetTimeMode === 'exact_time'
+                              ? 'bg-mudra-accent text-white shadow'
+                              : 'text-mudra-muted hover:text-white'
+                          }`}
+                        >
+                          Exact Clock Time
+                        </button>
+                      </div>
+                    </div>
+
+                    {targetTimeMode === 'duration' ? (
+                      <div className="space-y-2">
+                        {/* Quick duration presets */}
+                        <div className="grid grid-cols-5 gap-1.5">
+                          {[
+                            { label: '2 min', val: '2' },
+                            { label: '5 min', val: '5' },
+                            { label: '10 min', val: '10' },
+                            { label: '15 min', val: '15' },
+                            { label: '30 min', val: '30' },
+                          ].map((preset) => (
+                            <button
+                              key={preset.val}
+                              type="button"
+                              onClick={() => setTargetDurationMinutes(preset.val)}
+                              className={`py-1 text-xs rounded border transition-all ${
+                                targetDurationMinutes === preset.val
+                                  ? 'bg-mudra-accent text-white font-bold border-purple-400 shadow-sm'
+                                  : 'bg-mudra-bg border-mudra-border text-mudra-muted hover:text-white'
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <label className="text-[11px] text-mudra-muted whitespace-nowrap">Custom Duration:</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="720"
+                            className="input text-xs font-mono py-1 flex-1"
+                            placeholder="e.g. 10"
+                            value={targetDurationMinutes}
+                            onChange={(e) => setTargetDurationMinutes(e.target.value)}
+                          />
+                          <span className="text-xs text-mudra-muted">minutes</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <label className="text-[11px] text-mudra-muted whitespace-nowrap">Reach Price At:</label>
+                          <input
+                            type="time"
+                            className="input text-xs font-mono py-1 flex-1"
+                            value={targetExactTime}
+                            onChange={(e) => setTargetExactTime(e.target.value)}
+                          />
+                        </div>
+                        <p className="text-[10px] text-mudra-muted">
+                          Stock will organically reach the target price precisely by this clock time.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Live AI Drift Preview */}
+                    {overrideTicker && overridePrice && (
+                      <div className="bg-black/40 rounded-lg p-2 text-[11px] font-mono border border-purple-500/20 text-purple-200">
+                        {(() => {
+                          const cur = stocks.find((s) => s.ticker === overrideTicker)?.currentPrice || 0;
+                          const target = parseFloat(overridePrice) || 0;
+                          const diff = target - cur;
+                          const pct = cur > 0 ? ((diff / cur) * 100).toFixed(1) : 0;
+                          let mins = Number(targetDurationMinutes) || 10;
+                          if (targetTimeMode === 'exact_time' && targetExactTime) {
+                            const [hh, mm] = targetExactTime.split(':').map(Number);
+                            const d = new Date();
+                            d.setHours(hh, mm, 0, 0);
+                            if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+                            mins = Math.max(1, Math.round((d.getTime() - Date.now()) / 60000));
+                          }
+                          const cycles = Math.max(1, Math.round((mins * 60) / 30));
+                          const perCycle = (diff / cycles).toFixed(2);
+                          return (
+                            <div className="space-y-0.5">
+                              <div className="flex justify-between">
+                                <span className="text-mudra-muted">Trajectory:</span>
+                                <span className={diff >= 0 ? 'text-mudra-green font-bold' : 'text-mudra-red font-bold'}>
+                                  🪙{cur.toFixed(2)} → 🪙{target.toFixed(2)} ({diff >= 0 ? '+' : ''}{pct}%)
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-mudra-muted">Target Time:</span>
+                                <span className="text-white">~{mins} mins ({cycles} cycles of 30s)</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-mudra-muted">Pace:</span>
+                                <span className="text-mudra-gold">{perCycle >= 0 ? '+' : ''}🪙{perCycle} / cycle</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <button
                   onClick={handleOverridePrice}
                   disabled={!overrideTicker || !overridePrice}
@@ -744,31 +902,60 @@ const AdminPage = () => {
                 )}
 
                 {/* Active AI Target Shifts Monitor */}
-                {stocks.some((s) => Number(s.pendingShockAt) === 1) && (
+                {stocks.some((s) => s.pendingShock !== null && (Number(s.pendingShockAt) < 0 || Number(s.pendingShockAt) === 1)) && (
                   <div className="pt-2 border-t border-mudra-border/50 space-y-1.5">
                     <span className="text-[11px] font-bold text-mudra-accent flex items-center gap-1">
                       <span>🤖</span> Active AI Price Shifts in Progress:
                     </span>
-                    <div className="space-y-1 max-h-[100px] overflow-y-auto">
+                    <div className="space-y-1.5 max-h-[140px] overflow-y-auto">
                       {stocks
-                        .filter((s) => Number(s.pendingShockAt) === 1)
-                        .map((s) => (
-                          <div
-                            key={s.ticker}
-                            className="flex items-center justify-between p-1.5 rounded bg-purple-950/30 border border-purple-500/30 text-xs"
-                          >
-                            <span className="font-mono font-bold text-white">{s.ticker}</span>
-                            <span className="text-mudra-muted text-[11px]">
-                              🪙{s.currentPrice?.toFixed(2)} → <strong className="text-emerald-400">🪙{s.pendingShock}</strong>
-                            </span>
-                            <button
-                              onClick={() => handleCancelTargetShift(s.ticker)}
-                              className="text-[10px] text-mudra-red hover:underline font-bold"
+                        .filter((s) => s.pendingShock !== null && (Number(s.pendingShockAt) < 0 || Number(s.pendingShockAt) === 1))
+                        .map((s) => {
+                          const shockAt = Number(s.pendingShockAt);
+                          const deadline = shockAt < 0 ? Math.abs(shockAt) : null;
+                          const remainingMs = deadline ? Math.max(0, deadline - clock) : null;
+                          const remainingMins = remainingMs !== null ? Math.floor(remainingMs / 60000) : null;
+                          const remainingSecs = remainingMs !== null ? Math.floor((remainingMs % 60000) / 1000) : null;
+                          const deadlineTimeStr = deadline ? new Date(deadline).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+
+                          return (
+                            <div
+                              key={s.ticker}
+                              className="flex items-center justify-between p-2 rounded-lg bg-purple-950/30 border border-purple-500/30 text-xs gap-2"
                             >
-                              ✕ Cancel
-                            </button>
-                          </div>
-                        ))}
+                              <div className="flex flex-col">
+                                <span className="font-mono font-bold text-white flex items-center gap-1">
+                                  {s.ticker}
+                                  <span className="text-[10px] font-normal text-mudra-muted">({s.name})</span>
+                                </span>
+                                <span className="text-[11px] text-mudra-muted">
+                                  🪙{s.currentPrice?.toFixed(2)} → <strong className="text-emerald-400">🪙{s.pendingShock}</strong>
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-3">
+                                {deadline ? (
+                                  <div className="text-right">
+                                    <div className="text-[11px] font-mono text-purple-200">
+                                      {remainingMs <= 0 ? '🏁 Finalizing' : `⏱️ ${remainingMins}m ${remainingSecs}s`}
+                                    </div>
+                                    <div className="text-[10px] text-mudra-muted">
+                                      reach {deadlineTimeStr}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] text-purple-300">Drifting</span>
+                                )}
+                                <button
+                                  onClick={() => handleCancelTargetShift(s.ticker)}
+                                  className="px-2 py-1 rounded bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 text-[10px] text-red-300 font-bold"
+                                >
+                                  ✕ Cancel
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
                     </div>
                   </div>
                 )}
