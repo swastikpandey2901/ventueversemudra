@@ -5,7 +5,9 @@ import {
   subscribeStocks,
   subscribeRecentTrades,
   subscribeLeaderboard,
+  subscribeNews,
   publishNews,
+  deleteNews,
   getAllUsers,
   getShopItems,
   addShopItem,
@@ -102,6 +104,8 @@ const AdminPage = () => {
   const [aiLoading, setAiLoading] = useState(false);
   const [newsPublishing, setNewsPublishing] = useState(false);
   const [newsMsg, setNewsMsg] = useState('');
+  const [adminNewsList, setAdminNewsList] = useState([]);
+  const [deletingNewsId, setDeletingNewsId] = useState(null);
 
   // Event
   const [eventStart, setEventStart] = useState('');
@@ -126,6 +130,7 @@ const AdminPage = () => {
     const u1 = subscribeStocks(setStocks);
     const u2 = subscribeRecentTrades(setTrades);
     const u3 = subscribeLeaderboard(setBoard);
+    const u4 = subscribeNews(setAdminNewsList);
     getAllUsers().then(setUsers);
     getShopItems().then(setShopItems);
     getAllPurchases().then(setPurchases);
@@ -139,6 +144,7 @@ const AdminPage = () => {
       u1();
       u2();
       u3();
+      u4();
     };
   }, []);
 
@@ -369,6 +375,24 @@ const AdminPage = () => {
       setNewsMsg(`❌ ${err.message}`);
     } finally {
       setNewsPublishing(false);
+    }
+  };
+
+  // Delete News Article
+  const handleDeleteNews = async (id, headline) => {
+    const ok = window.confirm(
+      `Are you sure you want to delete this news article?\n\n"${headline}"\n\nAny pending stock price shock associated with this news will also be cancelled.`
+    );
+    if (!ok) return;
+    setDeletingNewsId(id);
+    try {
+      await deleteNews(id);
+      setAdminNewsList((prev) => prev.filter((n) => n.id !== id));
+      setNewsMsg('✅ News article deleted and any pending price shock cancelled.');
+    } catch (err) {
+      setNewsMsg(`❌ Failed to delete news: ${err.message}`);
+    } finally {
+      setDeletingNewsId(null);
     }
   };
 
@@ -1141,7 +1165,8 @@ const AdminPage = () => {
 
       {/* ── NEWS PUBLISHER ── */}
       {activeTab === 'news' && (
-        <div className="grid lg:grid-cols-12 gap-6">
+        <div className="space-y-6">
+          <div className="grid lg:grid-cols-12 gap-6">
           <div className="lg:col-span-7 card space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1506,6 +1531,139 @@ const AdminPage = () => {
             </div>
           </div>
         </div>
+
+        {/* ── Published News Articles Management ── */}
+        <div className="card space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-white text-lg flex items-center gap-2">
+                <span>📰</span> Published News Articles
+              </h2>
+              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-mudra-gold/20 text-mudra-gold border border-mudra-gold/30">
+                {adminNewsList.length} Total
+              </span>
+            </div>
+            <span className="text-xs text-mudra-muted hidden sm:inline">
+              Live student news feed & marquee ticker
+            </span>
+          </div>
+
+          {adminNewsList.length === 0 ? (
+            <div className="text-center py-8 text-mudra-muted text-sm border border-dashed border-mudra-border rounded-xl">
+              No news articles published yet. Use the composer above to publish market developments!
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+              {adminNewsList.map((item) => {
+                const publishedAtDate = item.publishedAt?.toMillis
+                  ? new Date(item.publishedAt.toMillis())
+                  : item.appliedAt
+                  ? new Date(Number(item.appliedAt) - 5 * 60 * 1000)
+                  : new Date();
+                const appliedAtMs = typeof item.appliedAt === 'number'
+                  ? item.appliedAt
+                  : (item.appliedAt?.toMillis ? item.appliedAt.toMillis() : new Date(item.appliedAt).getTime());
+                const isPendingShock = appliedAtMs && appliedAtMs > clock && item.shockPercent !== 0;
+                const remainingSecs = isPendingShock ? Math.max(0, Math.round((appliedAtMs - clock) / 1000)) : 0;
+                const remainingMins = Math.floor(remainingSecs / 60);
+                const remainingRemSecs = remainingSecs % 60;
+
+                return (
+                  <div
+                    key={item.id}
+                    className="p-3.5 rounded-xl bg-mudra-bg/70 border border-mudra-border hover:border-mudra-border/80 transition-all flex flex-col sm:flex-row sm:items-start justify-between gap-3"
+                  >
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className={`text-[11px] font-bold px-2 py-0.5 rounded ${
+                            item.sentiment === 'positive'
+                              ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40'
+                              : item.sentiment === 'negative'
+                              ? 'bg-red-950/60 text-red-400 border border-red-800/40'
+                              : 'bg-amber-950/60 text-amber-400 border border-amber-800/40'
+                          }`}
+                        >
+                          {item.sentiment === 'positive' ? '📈 Bullish' : item.sentiment === 'negative' ? '📉 Bearish' : '⚖️ Neutral'}
+                        </span>
+
+                        {item.shockPercent !== 0 && (
+                          <span
+                            className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded ${
+                              item.shockPercent > 0
+                                ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-500/30'
+                                : 'bg-red-950/40 text-red-300 border border-red-500/30'
+                            }`}
+                          >
+                            {item.shockPercent > 0 ? '+' : ''}{item.shockPercent}% Shock
+                          </span>
+                        )}
+
+                        {isPendingShock ? (
+                          <span className="text-[11px] font-mono font-bold text-amber-400 bg-amber-950/50 border border-amber-500/40 rounded px-2 py-0.5 animate-pulse">
+                            ⏳ Reaction in {remainingMins}:{String(remainingRemSecs).padStart(2, '0')}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-mudra-muted font-mono">
+                            ✓ Reaction Triggered
+                          </span>
+                        )}
+
+                        <span className="text-[11px] text-mudra-muted font-mono ml-auto sm:ml-0">
+                          {publishedAtDate.toLocaleString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                      </div>
+
+                      <h4 className="text-white font-bold text-sm leading-snug">
+                        {item.headline}
+                      </h4>
+
+                      {item.body && (
+                        <p className="text-xs text-mudra-muted line-clamp-2">
+                          {item.body}
+                        </p>
+                      )}
+
+                      {/* Affected Tickers */}
+                      {item.tickers && item.tickers.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                          <span className="text-[10px] text-mudra-muted">Affected:</span>
+                          {item.tickers.map((t) => (
+                            <span
+                              key={t}
+                              className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-black/40 border border-mudra-border text-mudra-accent font-bold"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Delete Action Button */}
+                    <div className="sm:self-center shrink-0">
+                      <button
+                        onClick={() => handleDeleteNews(item.id, item.headline)}
+                        disabled={deletingNewsId === item.id}
+                        className="w-full sm:w-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900 border border-red-500/40 text-red-300 hover:text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                        title="Delete this news article and cancel any pending price shock"
+                      >
+                        <span>🗑️</span>
+                        <span>{deletingNewsId === item.id ? 'Deleting...' : 'Delete'}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
       )}
 
       {/* ── SHOP MANAGER ── */}

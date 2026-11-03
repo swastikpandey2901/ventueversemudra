@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { subscribeNews } from '../supabase/api';
+import { subscribeNews, deleteNews } from '../supabase/api';
 import { SECTOR_COLORS, COMPANIES } from '../data/companies';
 import { useAuth } from '../context/AuthContext';
 
@@ -50,6 +50,26 @@ const NewsPage = () => {
   const [newsList, setNewsList] = useState([]);
   const [filter, setFilter] = useState('all'); // all | positive | negative | neutral
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState(null);
+  const [deleteMsg, setDeleteMsg] = useState('');
+
+  const handleDeleteNews = async (id, headline) => {
+    const ok = window.confirm(
+      `Are you sure you want to delete this news article?\n\n"${headline}"\n\nAny pending stock price shock associated with this news will also be cancelled.`
+    );
+    if (!ok) return;
+    setDeletingId(id);
+    try {
+      await deleteNews(id);
+      setNewsList((prev) => prev.filter((n) => n.id !== id));
+      setDeleteMsg('✅ News article deleted and any pending price shock cancelled.');
+      setTimeout(() => setDeleteMsg(''), 4000);
+    } catch (err) {
+      alert(`Error deleting news: ${err.message}`);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   useEffect(() => {
     const unsub = subscribeNews((data) => {
@@ -121,6 +141,14 @@ const NewsPage = () => {
         </div>
       </div>
 
+      {/* Optional feedback banner */}
+      {deleteMsg && (
+        <div className="mb-4 p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center justify-between">
+          <span>{deleteMsg}</span>
+          <button onClick={() => setDeleteMsg('')} className="text-emerald-400 hover:text-white font-bold ml-2">✕</button>
+        </div>
+      )}
+
       {/* Content */}
       {loading ? (
         <div className="card text-center py-16 text-mudra-muted">
@@ -175,14 +203,26 @@ const NewsPage = () => {
                     <CountdownBadge appliedAt={news.appliedAt} pendingShock={news.shockPercent} />
                   </div>
 
-                  <span className="text-xs text-mudra-muted shrink-0 font-mono">
-                    {publishedAtDate.toLocaleString('en-IN', {
-                      day: 'numeric',
-                      month: 'short',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs text-mudra-muted font-mono">
+                      {publishedAtDate.toLocaleString('en-IN', {
+                        day: 'numeric',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                    {userData?.role === 'admin' && (
+                      <button
+                        onClick={() => handleDeleteNews(news.id, news.headline)}
+                        disabled={deletingId === news.id}
+                        className="px-2 py-0.5 rounded text-[11px] bg-red-950/60 hover:bg-red-900/80 border border-red-500/40 text-red-300 font-bold transition-all flex items-center gap-1 shadow-sm"
+                        title="Delete this news and clear pending shock"
+                      >
+                        {deletingId === news.id ? 'Deleting...' : '🗑️ Delete'}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Headline */}

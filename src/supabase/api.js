@@ -788,6 +788,33 @@ export const publishNews = async (newsData) => {
   return data;
 };
 
+export const deleteNews = async (id, clearPendingShock = true) => {
+  if (clearPendingShock) {
+    try {
+      const { data: newsItem } = await supabase.from('news').select('*').eq('id', id).single();
+      if (newsItem?.tickers && Array.isArray(newsItem.tickers) && newsItem.tickers.length > 0) {
+        const now = Date.now();
+        for (const ticker of newsItem.tickers) {
+          const { data: st } = await supabase.from('stocks').select('pending_shock_at').eq('ticker', ticker).single();
+          // If stock has an unexecuted news shock (> 1) in the future, cancel it
+          if (st && Number(st.pending_shock_at) > now) {
+            await supabase.from('stocks').update({
+              pending_shock: null,
+              pending_shock_at: null,
+            }).eq('ticker', ticker);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not clear pending shock for deleted news:', e);
+    }
+  }
+
+  const { error } = await supabase.from('news').delete().eq('id', id);
+  if (error) throw error;
+  return true;
+};
+
 const normalizeNews = (n) => ({
   id: n.id,
   headline: n.headline,
