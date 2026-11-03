@@ -29,6 +29,7 @@ import {
   godMoveToTargetPrice,
   godCancelTargetPrice,
 } from '../engine/priceEngine';
+import { triggerAutonomousNewsDrop, getAutonomousNewsStatus } from '../engine/newsEngine';
 import { COMPANIES } from '../data/companies';
 import { supabase } from '../supabase/client';
 import MudraIcon from '../components/MudraIcon';
@@ -106,6 +107,19 @@ const AdminPage = () => {
   const [newsMsg, setNewsMsg] = useState('');
   const [adminNewsList, setAdminNewsList] = useState([]);
   const [deletingNewsId, setDeletingNewsId] = useState(null);
+  const [autoNewsStatus, setAutoNewsStatus] = useState(null);
+  const [droppingAutoNews, setDroppingAutoNews] = useState(false);
+
+  // Poll autonomous news drop countdown when news tab is open
+  useEffect(() => {
+    if (activeTab !== 'news') return;
+    const fetchStatus = () => {
+      getAutonomousNewsStatus().then(setAutoNewsStatus);
+    };
+    fetchStatus();
+    const timer = setInterval(fetchStatus, 3000);
+    return () => clearInterval(timer);
+  }, [activeTab]);
 
   // Event
   const [eventStart, setEventStart] = useState('');
@@ -393,6 +407,23 @@ const AdminPage = () => {
       setNewsMsg(`❌ Failed to delete news: ${err.message}`);
     } finally {
       setDeletingNewsId(null);
+    }
+  };
+
+  // Trigger immediate Autonomous News Drop
+  const handleTriggerAutoNews = async () => {
+    setDroppingAutoNews(true);
+    try {
+      const res = await triggerAutonomousNewsDrop();
+      if (res.success) {
+        setNewsMsg(`🤖 Dropped autonomous news: "${res.article.headline}"`);
+        const st = await getAutonomousNewsStatus();
+        setAutoNewsStatus(st);
+      }
+    } catch (err) {
+      setNewsMsg(`❌ Failed to drop auto news: ${err.message}`);
+    } finally {
+      setDroppingAutoNews(false);
     }
   };
 
@@ -1166,6 +1197,76 @@ const AdminPage = () => {
       {/* ── NEWS PUBLISHER ── */}
       {activeTab === 'news' && (
         <div className="space-y-6">
+          {/* Autonomous 10-Minute News Broadcaster Card */}
+          <div className="card border-mudra-gold/30 bg-gradient-to-r from-mudra-card via-amber-950/20 to-mudra-card space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-bold text-mudra-gold text-lg flex items-center gap-2">
+                    <span>🤖</span> Autonomous Mudra News Broadcaster
+                  </h2>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/70 text-emerald-400 border border-emerald-500/40 font-bold animate-pulse">
+                    🟢 AUTO 10-MIN
+                  </span>
+                </div>
+                <p className="text-xs text-mudra-muted mt-0.5">
+                  Autonomous news cycle broadcasts fresh stories for country <strong>Mudra</strong> every 10 minutes.
+                  Mixes real corporate market shocks with celebrity/actor rumors, parliamentary debates, and quirky gibberish decoys to keep traders sharp.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="bg-mudra-bg border border-mudra-border/60 px-3 py-1.5 rounded-lg text-right">
+                  <div className="text-[10px] text-mudra-muted uppercase tracking-wider font-semibold">Next Drop In</div>
+                  <div className="text-sm font-mono font-bold text-amber-400">
+                    {autoNewsStatus?.remainingSeconds > 0 ? (
+                      `⏱️ ${Math.floor(autoNewsStatus.remainingSeconds / 60)}m ${String(autoNewsStatus.remainingSeconds % 60).padStart(2, '0')}s`
+                    ) : (
+                      '⚡ Imminent / Ready'
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleTriggerAutoNews}
+                  disabled={droppingAutoNews}
+                  className="btn-primary text-xs px-3.5 py-2.5 font-bold flex items-center gap-1.5 shadow-md shadow-mudra-accent/20"
+                  title="Force drop a random autonomous news story immediately"
+                >
+                  {droppingAutoNews ? (
+                    <span>⏳ Broadcasting...</span>
+                  ) : (
+                    <span>⚡ Drop News Now</span>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Variety Pills */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-mudra-border/40 text-[11px]">
+              <span className="text-mudra-muted font-medium">Rotation Pool:</span>
+              <span className="px-2 py-0.5 rounded bg-pink-950/50 border border-pink-500/30 text-pink-300">
+                🎬 Cinema & Actor Gossip (Decoy)
+              </span>
+              <span className="px-2 py-0.5 rounded bg-blue-950/50 border border-blue-500/30 text-blue-300">
+                🏛️ Parliament & Politics (Decoy)
+              </span>
+              <span className="px-2 py-0.5 rounded bg-purple-950/50 border border-purple-500/30 text-purple-300">
+                📰 Quirky Gibberish & Lore (Decoy)
+              </span>
+              <span className="px-2 py-0.5 rounded bg-emerald-950/50 border border-emerald-500/30 text-emerald-300 font-semibold">
+                💼 Corporate Earnings & Contracts (Real ±4% to ±14%)
+              </span>
+            </div>
+
+            {autoNewsStatus?.latestHeadline && (
+              <div className="text-[11px] text-mudra-muted flex items-center gap-1.5 truncate">
+                <span className="text-mudra-gold font-bold">Latest Broadcast:</span>
+                <span className="text-white italic truncate">"{autoNewsStatus.latestHeadline}"</span>
+              </div>
+            )}
+          </div>
+
           <div className="grid lg:grid-cols-12 gap-6">
           <div className="lg:col-span-7 card space-y-4">
             <div className="flex items-center justify-between">

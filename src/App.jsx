@@ -14,6 +14,7 @@ import AdminPage from './pages/AdminPage';
 import FinancePage from './pages/FinancePage';
 import ShopPage from './pages/ShopPage';
 import { runAutonomousCycleIfNeeded } from './engine/priceEngine';
+import { checkAutonomousNewsDropIfNeeded } from './engine/newsEngine';
 import NameSetupModal from './components/NameSetupModal';
 
 const ProtectedRoute = ({ children }) => {
@@ -32,9 +33,13 @@ const AdminRoute = ({ children }) => {
 
 const AppRoutes = () => {
   useEffect(() => {
-    // Market is ALWAYS ON: Autonomous background heartbeat every 20s
+    // Market & News are ALWAYS ON: Autonomous background heartbeat every 20s
     runAutonomousCycleIfNeeded();
-    const interval = setInterval(runAutonomousCycleIfNeeded, 20000);
+    checkAutonomousNewsDropIfNeeded();
+    const interval = setInterval(() => {
+      runAutonomousCycleIfNeeded();
+      checkAutonomousNewsDropIfNeeded();
+    }, 20000);
     return () => clearInterval(interval);
   }, []);
 
