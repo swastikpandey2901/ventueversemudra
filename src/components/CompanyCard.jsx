@@ -60,13 +60,6 @@ const CompanyCard = ({ stock }) => {
           Cap: {stock.category === 'L' ? 'Large' : stock.category === 'M' ? 'Mid' : 'Small'}
         </div>
       </div>
-
-      {/* Pending news shock indicator */}
-      {stock.pendingShock && (
-        <div className="mt-2 text-xs text-mudra-gold bg-amber-900/20 rounded px-2 py-1">
-          📰 News impact incoming...
-        </div>
-      )}
     </Link>
   );
 };

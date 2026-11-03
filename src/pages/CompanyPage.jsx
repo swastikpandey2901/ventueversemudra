@@ -78,21 +78,6 @@ const CompanyPage = () => {
         <StockChart data={stock.priceHistory} startPrice={company?.startPrice} />
       </div>
 
-      {/* Pending news shock */}
-      {stock.pendingShock && (
-        <div className="card mb-6 border-mudra-gold/40 bg-amber-900/10">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">📰</span>
-            <div>
-              <div className="text-mudra-gold font-semibold">News Impact Incoming</div>
-              <div className="text-mudra-muted text-sm">
-                A news event will affect this stock's price soon. Be ready to trade!
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Trade Button */}
       {user && (
         <div className="flex gap-3">

@@ -12,38 +12,6 @@ const sentimentConfig = {
   neutral: { color: 'text-mudra-gold', bg: 'bg-amber-950/20 border-amber-700/30', icon: '⚖️', label: 'Neutral' },
 };
 
-const CountdownBadge = ({ appliedAt, pendingShock }) => {
-  const [timeLeft, setTimeLeft] = useState('');
-
-  useEffect(() => {
-    if (!appliedAt) return;
-    const target = typeof appliedAt === 'number' ? appliedAt : (appliedAt.toMillis ? appliedAt.toMillis() : new Date(appliedAt).getTime());
-    if (isNaN(target)) return;
-
-    const tick = () => {
-      const diff = target - Date.now();
-      if (diff <= 0) {
-        setTimeLeft('Price Impact Live ✓');
-        return;
-      }
-      const m = Math.floor(diff / 60000);
-      const s = Math.floor((diff % 60000) / 1000);
-      setTimeLeft(`Reaction in ${m}:${String(s).padStart(2, '0')}`);
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [appliedAt]);
-
-  if (!appliedAt && !pendingShock) return null;
-
-  return (
-    <span className="text-xs font-mono font-bold text-mudra-gold bg-amber-950/60 border border-amber-700/40 rounded px-2.5 py-0.5 animate-pulse">
-      ⏳ {timeLeft || 'Pending Reaction'}
-    </span>
-  );
-};
-
 const NewsPage = () => {
   const navigate = useNavigate();
   const { userData } = useAuth();
@@ -114,7 +82,7 @@ const NewsPage = () => {
             📰 <span className="text-mudra-gold">Market News Feed</span>
           </h1>
           <p className="text-mudra-muted text-sm mt-1">
-            Real-time corporate & economic releases. Stock prices react 5 minutes after publication.
+            Real-time corporate & economic releases across the 30 Mudra equities.
           </p>
         </div>
 
@@ -189,18 +157,6 @@ const NewsPage = () => {
                     <span className={`text-xs font-bold ${cfg.color} flex items-center gap-1`}>
                       {cfg.icon} {cfg.label}
                     </span>
-                    {news.shockPercent !== 0 && (
-                      <span
-                        className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${
-                          news.shockPercent > 0
-                            ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40'
-                            : 'bg-red-950/60 text-red-400 border border-red-800/40'
-                        }`}
-                      >
-                        {news.shockPercent > 0 ? '+' : ''}{news.shockPercent}% Shock
-                      </span>
-                    )}
-                    <CountdownBadge appliedAt={news.appliedAt} pendingShock={news.shockPercent} />
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
@@ -254,13 +210,6 @@ const NewsPage = () => {
                     </div>
                   );
                 })()}
-
-                {/* AI Reasoning */}
-                {news.aiReasoning && (
-                  <div className="mt-3 text-xs text-mudra-muted italic bg-mudra-bg/40 p-2.5 rounded-lg border border-mudra-border/30">
-                    🤖 <strong className="text-mudra-text">Market Analyst Note:</strong> {news.aiReasoning}
-                  </div>
-                )}
               </div>
             );
           })}
