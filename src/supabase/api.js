@@ -986,7 +986,13 @@ export const subscribeSavings = (userId, callback) => {
   };
 };
 
-export const depositSavings = async ({ userId, amount, durationDays = 3, rate = 0.05 }) => {
+export const depositSavings = async ({
+  userId,
+  amount,
+  durationDays = 3,
+  durationMinutes = null,
+  rate = 0.05,
+}) => {
   const depAmount = parseFloat(amount);
   if (isNaN(depAmount) || depAmount <= 0) throw new Error('Invalid deposit amount');
 
@@ -1010,7 +1016,10 @@ export const depositSavings = async ({ userId, amount, durationDays = 3, rate = 
 
   // 3. Create Savings Row
   const now = new Date();
-  const maturesAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+  const durationMs = durationMinutes
+    ? durationMinutes * 60 * 1000
+    : durationDays * 24 * 60 * 60 * 1000;
+  const maturesAt = new Date(now.getTime() + durationMs);
   const payout = depAmount * (1 + rate);
 
   const { error: insErr } = await supabase.from('savings').insert({
@@ -1068,6 +1077,74 @@ export const withdrawSavings = async ({ userId, savingsId }) => {
   if (pUpdErr) throw pUpdErr;
 
   return payout;
+};
+
+// Auto-process matured savings for a single user (returns money directly to cash wallet)
+export const autoProcessMaturedSavings = async (userId) => {
+  if (!userId) return [];
+  try {
+    const { data: deposits, error } = await supabase
+      .from('savings')
+      .select('*')
+      .eq('user_id', userId)
+      .neq('status', 'withdrawn');
+
+    if (error || !deposits || deposits.length === 0) return [];
+
+    const now = Date.now();
+    const matured = deposits.filter((d) => {
+      const maturesAtMs = new Date(d.matures_at).getTime();
+      return now >= maturesAtMs;
+    });
+
+    if (matured.length === 0) return [];
+
+    const paidOut = [];
+    for (const dep of matured) {
+      try {
+        const payout = await withdrawSavings({ userId, savingsId: dep.id });
+        paidOut.push({ id: dep.id, amount: dep.amount, payout });
+      } catch (wErr) {
+        console.error('Error auto-paying deposit:', dep.id, wErr);
+      }
+    }
+
+    if (paidOut.length > 0) {
+      window.dispatchEvent(new CustomEvent('mudra-savings-autopaid', { detail: { paidOut } }));
+    }
+
+    return paidOut;
+  } catch (err) {
+    console.error('Auto process matured savings error:', err);
+    return [];
+  }
+};
+
+// Global sweep of all matured savings across all users
+export const sweepAllMaturedSavings = async () => {
+  try {
+    const nowIso = new Date().toISOString();
+    const { data: matured, error } = await supabase
+      .from('savings')
+      .select('*')
+      .neq('status', 'withdrawn')
+      .lte('matures_at', nowIso);
+
+    if (error || !matured || matured.length === 0) return 0;
+
+    let count = 0;
+    for (const dep of matured) {
+      try {
+        await withdrawSavings({ userId: dep.user_id, savingsId: dep.id });
+        count++;
+      } catch (err) {
+        console.error('Error sweeping matured saving:', dep.id, err);
+      }
+    }
+    return count;
+  } catch (e) {
+    return 0;
+  }
 };
 
 // ─── COMMODITIES (GOLD & SILVER) ───────────────────────────────────────────

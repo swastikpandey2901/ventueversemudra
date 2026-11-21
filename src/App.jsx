@@ -15,6 +15,8 @@ import FinancePage from './pages/FinancePage';
 import ShopPage from './pages/ShopPage';
 import { runAutonomousCycleIfNeeded } from './engine/priceEngine';
 import { checkAutonomousNewsDropIfNeeded } from './engine/newsEngine';
+import { checkAndExecuteLimitOrders } from './engine/limitOrderEngine';
+import { sweepAllMaturedSavings, getAllStocks } from './supabase/api';
 import NameSetupModal from './components/NameSetupModal';
 
 const ProtectedRoute = ({ children }) => {
@@ -32,16 +34,26 @@ const AdminRoute = ({ children }) => {
 };
 
 const AppRoutes = () => {
+  const { user, userData } = useAuth();
+
   useEffect(() => {
-    // Market & News are ALWAYS ON: Autonomous background heartbeat every 20s
-    runAutonomousCycleIfNeeded();
-    checkAutonomousNewsDropIfNeeded();
-    const interval = setInterval(() => {
+    // Market, News, Savings & Limit Orders: Autonomous background heartbeat every 20s
+    const runHeartbeat = async () => {
       runAutonomousCycleIfNeeded();
       checkAutonomousNewsDropIfNeeded();
-    }, 20000);
+      sweepAllMaturedSavings();
+
+      const currentUserId = user?.id || user?.uid;
+      if (currentUserId) {
+        const stocks = await getAllStocks();
+        checkAndExecuteLimitOrders(stocks, currentUserId, userData?.name);
+      }
+    };
+
+    runHeartbeat();
+    const interval = setInterval(runHeartbeat, 20000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user, userData?.name]);
 
   return (
     <>

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { placeTrade, getUserHoldings } from '../supabase/api';
 import { useAuth } from '../context/AuthContext';
+import { getUserLimits, setUserLimit } from '../engine/limitOrderEngine';
 import MudraIcon from './MudraIcon';
 
 const TradeModal = ({ stock, onClose, defaultType = 'buy' }) => {
@@ -11,9 +12,12 @@ const TradeModal = ({ stock, onClose, defaultType = 'buy' }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [enableLimits, setEnableLimits] = useState(false);
+  const [stopLossPrice, setStopLossPrice] = useState('');
+  const [takeProfitPrice, setTakeProfitPrice] = useState('');
   const isSubmittingRef = useRef(false);
 
-  // Fetch current user holding quantity for this specific stock
+  // Fetch current user holding quantity and active limits for this stock
   useEffect(() => {
     const currentUserId = user?.id || user?.uid;
     if (currentUserId && stock?.ticker) {
@@ -21,6 +25,13 @@ const TradeModal = ({ stock, onClose, defaultType = 'buy' }) => {
         const item = holdings.find((h) => h.ticker === stock.ticker);
         setUserHolding(item ? Number(item.quantity) : 0);
       });
+
+      const active = getUserLimits(currentUserId)[stock.ticker];
+      if (active) {
+        setEnableLimits(true);
+        if (active.stopLoss) setStopLossPrice(active.stopLoss.toString());
+        if (active.takeProfit) setTakeProfitPrice(active.takeProfit.toString());
+      }
     }
   }, [user, stock?.ticker]);
 
@@ -106,6 +117,16 @@ const TradeModal = ({ stock, onClose, defaultType = 'buy' }) => {
         quantity: cleanQty,
         price: stock.currentPrice,
       });
+
+      // Save or update active limits if enabled
+      if (enableLimits && (stopLossPrice || takeProfitPrice)) {
+        setUserLimit(currentUserId, stock.ticker, {
+          stopLoss: stopLossPrice,
+          takeProfit: takeProfitPrice,
+          quantity: type === 'buy' ? holdingQty + cleanQty : Math.max(0, holdingQty - cleanQty),
+          entryPrice: stock.currentPrice,
+        });
+      }
 
       setSuccess(
         `${type === 'buy' ? '✅ Successfully Bought' : '✅ Successfully Sold'} ${cleanQty} share${cleanQty > 1 ? 's' : ''} of ${stock.ticker} @ 🪙${stock.currentPrice.toLocaleString('en-IN')}`
@@ -314,6 +335,110 @@ const TradeModal = ({ stock, onClose, defaultType = 'buy' }) => {
               );
             })}
           </div>
+        </div>
+
+        {/* ── Stop Loss & Take Profit Auto-Exit Limits ── */}
+        <div className="bg-mudra-bg/70 rounded-xl p-3 border border-mudra-border/60 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-white flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={enableLimits}
+                onChange={(e) => {
+                  setEnableLimits(e.target.checked);
+                  if (e.target.checked) {
+                    if (!stopLossPrice) setStopLossPrice((currentPrice * 0.95).toFixed(2));
+                    if (!takeProfitPrice) setTakeProfitPrice((currentPrice * 1.15).toFixed(2));
+                  }
+                }}
+                className="w-4 h-4 rounded accent-mudra-gold cursor-pointer"
+              />
+              <span className="flex items-center gap-1.5">
+                <span>🛡️</span> Auto Limits (Stop Loss / Profit)
+              </span>
+            </label>
+            <span className="text-[10px] text-mudra-muted font-mono">
+              Auto-Sell on Target
+            </span>
+          </div>
+
+          {enableLimits && (
+            <div className="space-y-3 pt-2.5 border-t border-mudra-border/40 text-xs">
+              {/* Stop Loss Field */}
+              <div className="space-y-1">
+                <div className="flex justify-between items-center">
+                  <span className="text-rose-400 font-semibold flex items-center gap-1">
+                    <span>🛑</span> Stop Loss Price
+                  </span>
+                  {stopLossPrice && (
+                    <span className="text-[10px] text-mudra-muted font-mono">
+                      {(((parseFloat(stopLossPrice) - currentPrice) / currentPrice) * 100).toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-1.5 items-center">
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder={`e.g. ${(currentPrice * 0.95).toFixed(2)}`}
+                    value={stopLossPrice}
+                    onChange={(e) => setStopLossPrice(e.target.value)}
+                    className="input text-xs font-mono py-1.5 px-2.5 flex-1"
+                  />
+                  {[-5, -10, -15].map((pct) => (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => setStopLossPrice((currentPrice * (1 + pct / 100)).toFixed(2))}
+                      className="text-[11px] px-2 py-1.5 rounded bg-red-950/40 border border-red-500/30 text-red-300 hover:bg-red-900/50 font-mono font-bold"
+                    >
+                      {pct}%
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-mudra-muted">
+                  Auto-sells shares if price drops to or below 🪙{stopLossPrice || '...'}
+                </p>
+              </div>
+
+              {/* Take Profit Field */}
+              <div className="space-y-1">
+                <div className="flex justify-between items-center">
+                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                    <span>🎯</span> Take Profit Target
+                  </span>
+                  {takeProfitPrice && (
+                    <span className="text-[10px] text-mudra-muted font-mono">
+                      +{(((parseFloat(takeProfitPrice) - currentPrice) / currentPrice) * 100).toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-1.5 items-center">
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder={`e.g. ${(currentPrice * 1.15).toFixed(2)}`}
+                    value={takeProfitPrice}
+                    onChange={(e) => setTakeProfitPrice(e.target.value)}
+                    className="input text-xs font-mono py-1.5 px-2.5 flex-1"
+                  />
+                  {[10, 20, 30].map((pct) => (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => setTakeProfitPrice((currentPrice * (1 + pct / 100)).toFixed(2))}
+                      className="text-[11px] px-2 py-1.5 rounded bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-900/50 font-mono font-bold"
+                    >
+                      +{pct}%
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-mudra-muted">
+                  Auto-sells shares if price climbs to or above 🪙{takeProfitPrice || '...'}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Order Summary */}

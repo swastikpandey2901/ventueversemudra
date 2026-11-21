@@ -92,9 +92,22 @@ export const runPriceCycle = async () => {
         newPrice = Math.max(1, parseFloat(rawNewPrice.toFixed(2)));
       }
 
-      // 3. Update price history array
+      // 3. Update price history array with OHLC data for Candlestick charts
       let history = Array.isArray(stock.price_history) ? [...stock.price_history] : [];
-      history.push({ price: newPrice, timestamp: now });
+      const candleOpen = currentPrice;
+      const candleClose = newPrice;
+      const candleNoise = Math.abs(j) * 0.5 + 0.001;
+      const candleHigh = parseFloat((Math.max(candleOpen, candleClose) * (1 + candleNoise)).toFixed(2));
+      const candleLow = parseFloat((Math.min(candleOpen, candleClose) * (1 - candleNoise)).toFixed(2));
+
+      history.push({
+        price: newPrice,
+        timestamp: now,
+        open: candleOpen,
+        high: candleHigh,
+        low: candleLow,
+        close: candleClose,
+      });
       if (history.length > MAX_HISTORY) {
         history.splice(0, history.length - MAX_HISTORY);
       }

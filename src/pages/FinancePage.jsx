@@ -7,6 +7,7 @@ import {
   subscribeSavings,
   depositSavings,
   withdrawSavings,
+  autoProcessMaturedSavings,
   getCommodities,
   subscribeCommodities,
   getUserCommodityHoldings,
@@ -20,9 +21,10 @@ import {
 } from '../supabase/api';
 
 const DURATION_OPTIONS = [
-  { days: 1, rate: 0.03, label: '1 Day (Flash Lock)', returnPct: '+3%' },
-  { days: 3, rate: 0.05, label: '3 Days (Standard)', returnPct: '+5%' },
-  { days: 7, rate: 0.10, label: '7 Days (Full Event)', returnPct: '+10%' },
+  { minutes: 5, rate: 0.03, label: '5 Mins (Fast Interest)', returnPct: '+3%' },
+  { minutes: 15, rate: 0.06, label: '15 Mins (Event Lock)', returnPct: '+6%' },
+  { minutes: 30, rate: 0.10, label: '30 Mins (Tournament Pro)', returnPct: '+10%' },
+  { days: 1, rate: 0.15, label: '1 Day (Standard)', returnPct: '+15%' },
 ];
 
 const FinancePage = () => {
@@ -32,7 +34,7 @@ const FinancePage = () => {
   // ── Savings State ──
   const [savingsList, setSavingsList] = useState([]);
   const [depAmount, setDepAmount] = useState('');
-  const [selectedDuration, setSelectedDuration] = useState(DURATION_OPTIONS[1]);
+  const [selectedDuration, setSelectedDuration] = useState(DURATION_OPTIONS[0]);
   const [savingsLoading, setSavingsLoading] = useState(false);
   const [savingsMsg, setSavingsMsg] = useState('');
 
@@ -54,9 +56,21 @@ const FinancePage = () => {
 
   const userId = user?.id || user?.uid;
 
-  // Real-time Subscriptions
+  // Real-time Subscriptions & Auto-Process Matured Deposits
   useEffect(() => {
     if (!userId) return;
+
+    // Check and auto-payout any matured savings immediately upon opening Finance
+    const checkAutoMaturity = async () => {
+      const paid = await autoProcessMaturedSavings(userId);
+      if (paid && paid.length > 0) {
+        const totalCredited = paid.reduce((s, p) => s + p.payout, 0);
+        setSavingsMsg(`🎉 ${paid.length} Fixed Deposit(s) matured! 🪙${totalCredited.toLocaleString('en-IN', { maximumFractionDigits: 0 })} automatically returned to your cash account!`);
+        refreshUserData();
+      }
+    };
+    checkAutoMaturity();
+    const autoInterval = setInterval(checkAutoMaturity, 10000);
 
     const u1 = subscribeSavings(userId, setSavingsList);
     const u2 = subscribeCommodities(setCommodities);
@@ -65,6 +79,7 @@ const FinancePage = () => {
     const u5 = subscribeMFHoldings(userId, setMfHoldings);
 
     return () => {
+      clearInterval(autoInterval);
       u1?.();
       u2?.();
       u3?.();
@@ -89,10 +104,11 @@ const FinancePage = () => {
       await depositSavings({
         userId,
         amount: amt,
-        durationDays: selectedDuration.days,
+        durationDays: selectedDuration.days || null,
+        durationMinutes: selectedDuration.minutes || null,
         rate: selectedDuration.rate,
       });
-      setSavingsMsg(`✅ Successfully locked 🪙${amt.toLocaleString('en-IN')} for ${selectedDuration.days} days!`);
+      setSavingsMsg(`✅ Successfully locked 🪙${amt.toLocaleString('en-IN')} for ${selectedDuration.label}!`);
       setDepAmount('');
       await refreshUserData();
     } catch (err) {
@@ -396,7 +412,14 @@ const FinancePage = () => {
                     const isMatured = dep.status === 'matured' || Date.now() >= new Date(dep.maturesAt).getTime();
                     const isWithdrawn = dep.status === 'withdrawn';
                     const diffMs = new Date(dep.maturesAt).getTime() - Date.now();
-                    const hoursLeft = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60)));
+                    const totalSecsLeft = Math.max(0, Math.round(diffMs / 1000));
+                    const minsLeft = Math.floor(totalSecsLeft / 60);
+                    const secsLeft = totalSecsLeft % 60;
+                    const timeLeftDisplay = minsLeft >= 60
+                      ? `${Math.ceil(minsLeft / 60)}h remaining`
+                      : minsLeft > 0
+                      ? `${minsLeft}m ${secsLeft}s left`
+                      : `${secsLeft}s left`;
 
                     return (
                       <div
@@ -420,13 +443,13 @@ const FinancePage = () => {
                               </span>
                             </div>
                             <div className="text-xs text-mudra-muted mt-1">
-                              Locked on: {new Date(dep.depositedAt).toLocaleDateString('en-IN')} • Matures:{' '}
-                              {new Date(dep.maturesAt).toLocaleDateString('en-IN')} (
+                              Locked on: {new Date(dep.depositedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} • Matures:{' '}
+                              {new Date(dep.maturesAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} (
                               {isWithdrawn
                                 ? 'Withdrawn'
                                 : isMatured
                                 ? 'Matured!'
-                                : `${hoursLeft}h remaining`}
+                                : timeLeftDisplay}
                               )
                             </div>
                           </div>
@@ -443,14 +466,14 @@ const FinancePage = () => {
                         <div className="mt-3 pt-3 border-t border-mudra-border/40 flex items-center justify-between">
                           <div>
                             {isWithdrawn ? (
-                              <span className="text-xs text-mudra-muted font-medium">✅ Already Withdrawn</span>
+                              <span className="text-xs text-mudra-muted font-medium">✅ Paid Out to Wallet</span>
                             ) : isMatured ? (
                               <span className="text-xs text-emerald-400 font-semibold animate-pulse">
-                                🎉 Matured & Ready for Payout!
+                                🎉 Matured & Auto-Crediting to Cash!
                               </span>
                             ) : (
                               <span className="text-xs text-mudra-gold font-medium">
-                                ⏳ Locked ({hoursLeft} hrs left)
+                                ⏳ Locked ({timeLeftDisplay})
                               </span>
                             )}
                           </div>

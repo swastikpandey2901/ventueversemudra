@@ -10,10 +10,24 @@ import {
   subscribeMutualFunds,
   subscribeMFHoldings,
   updateUserName,
+  autoProcessMaturedSavings,
+  withdrawSavings,
 } from '../supabase/api';
+import { getUserLimits, setUserLimit, clearUserLimit } from '../engine/limitOrderEngine';
 import TradeModal from '../components/TradeModal';
 import MudraIcon from '../components/MudraIcon';
 import { supabase } from '../supabase/client';
+
+const formatCurrency = (val) => {
+  const num = Number(val) || 0;
+  if (Math.abs(num) >= 10000000) {
+    return `${(num / 10000000).toFixed(2)} Cr`;
+  }
+  if (Math.abs(num) >= 100000) {
+    return `${(num / 100000).toFixed(2)} L`;
+  }
+  return num.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+};
 
 const PortfolioPage = () => {
   const { user, userData, refreshUserData } = useAuth();
@@ -22,6 +36,12 @@ const PortfolioPage = () => {
   const [selectedStock, setSelectedStock] = useState(null);
   const [tradeActionType, setTradeActionType] = useState('buy');
   const [liveUserData, setLiveUserData] = useState(null);
+
+  // Stop Loss & Take Profit limits state
+  const [userLimits, setUserLimits] = useState({});
+  const [limitModalStock, setLimitModalStock] = useState(null);
+  const [editSL, setEditSL] = useState('');
+  const [editTP, setEditTP] = useState('');
 
   // Name Editing State
   const [isEditingName, setIsEditingName] = useState(false);
@@ -41,6 +61,15 @@ const PortfolioPage = () => {
 
   useEffect(() => {
     if (!userId) return;
+
+    // Load active limits and auto-process any matured deposits immediately
+    setUserLimits(getUserLimits(userId));
+    autoProcessMaturedSavings(userId);
+    const matureInterval = setInterval(() => autoProcessMaturedSavings(userId), 10000);
+
+    const onLimitsUpdated = () => setUserLimits(getUserLimits(userId));
+    window.addEventListener('mudra-limits-updated', onLimitsUpdated);
+    window.addEventListener('mudra-limits-executed', onLimitsUpdated);
 
     const unsub1 = subscribeHoldings(userId, setHoldings);
     const unsub2 = subscribeStocks((data) => {
@@ -84,6 +113,9 @@ const PortfolioPage = () => {
       .subscribe();
 
     return () => {
+      clearInterval(matureInterval);
+      window.removeEventListener('mudra-limits-updated', onLimitsUpdated);
+      window.removeEventListener('mudra-limits-executed', onLimitsUpdated);
       unsub1?.();
       unsub2?.();
       unsub3?.();
@@ -276,39 +308,62 @@ const PortfolioPage = () => {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <div className="card border-mudra-accent/40 bg-gradient-to-br from-mudra-card to-mudra-accent/10">
-          <div className="text-xs text-mudra-muted mb-1">Total Net Worth</div>
-          <div className="text-2xl font-black font-mono text-white flex items-center gap-1">
-            <MudraIcon className="w-5 h-5" />
-            {totalPortfolio.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-8">
+        <div className="card border-mudra-accent/40 bg-gradient-to-br from-mudra-card to-mudra-accent/10 min-w-0 overflow-hidden p-3 sm:p-4">
+          <div className="text-xs text-mudra-muted mb-1 truncate">Total Net Worth</div>
+          <div
+            className="text-base sm:text-xl lg:text-2xl font-black font-mono text-white flex items-center gap-1 min-w-0"
+            title={`🪙${totalPortfolio.toLocaleString('en-IN')}`}
+          >
+            <MudraIcon className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+            <span className="truncate">{formatCurrency(totalPortfolio)}</span>
+          </div>
+          <div className="text-[10px] text-mudra-muted font-mono truncate hidden sm:block">
+            🪙{totalPortfolio.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
           </div>
         </div>
-        <div className="card">
-          <div className="text-xs text-mudra-muted mb-1">Liquid Cash</div>
-          <div className="text-xl font-bold font-mono text-mudra-green flex items-center gap-1">
-            <MudraIcon className="w-4 h-4" />
-            {cash.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+
+        <div className="card min-w-0 overflow-hidden p-3 sm:p-4">
+          <div className="text-xs text-mudra-muted mb-1 truncate">Liquid Cash</div>
+          <div
+            className="text-base sm:text-xl lg:text-2xl font-bold font-mono text-mudra-green flex items-center gap-1 min-w-0"
+            title={`🪙${cash.toLocaleString('en-IN')}`}
+          >
+            <MudraIcon className="w-4 h-4 shrink-0" />
+            <span className="truncate">{formatCurrency(cash)}</span>
+          </div>
+          <div className="text-[10px] text-mudra-muted font-mono truncate hidden sm:block">
+            🪙{cash.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
           </div>
         </div>
-        <div className="card">
-          <div className="text-xs text-mudra-muted mb-1">All Assets Invested</div>
-          <div className="text-xl font-bold font-mono text-white flex items-center gap-1">
-            <MudraIcon className="w-4 h-4" />
-            {totalInvestedValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+
+        <div className="card min-w-0 overflow-hidden p-3 sm:p-4">
+          <div className="text-xs text-mudra-muted mb-1 truncate">All Assets Invested</div>
+          <div
+            className="text-base sm:text-xl lg:text-2xl font-bold font-mono text-white flex items-center gap-1 min-w-0"
+            title={`🪙${totalInvestedValue.toLocaleString('en-IN')}`}
+          >
+            <MudraIcon className="w-4 h-4 shrink-0" />
+            <span className="truncate">{formatCurrency(totalInvestedValue)}</span>
           </div>
-          <div className="text-[10px] text-mudra-muted mt-0.5">
-            Stocks + Savings + Metals + Funds
+          <div className="text-[10px] text-mudra-muted mt-0.5 truncate">
+            Stocks+FD+Metals+Funds
           </div>
         </div>
-        <div className="card">
-          <div className="text-xs text-mudra-muted mb-1">Total P&L (from 2L)</div>
-          <div className={`text-xl font-bold font-mono flex items-center gap-1 ${totalPnl >= 0 ? 'text-mudra-green' : 'text-mudra-red'}`}>
-            {totalPnl >= 0 ? '+' : '-'}
-            <MudraIcon className="w-4 h-4" />
-            {Math.abs(totalPnl).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+
+        <div className="card min-w-0 overflow-hidden p-3 sm:p-4">
+          <div className="text-xs text-mudra-muted mb-1 truncate">Total P&L (from 2L)</div>
+          <div
+            className={`text-base sm:text-xl lg:text-2xl font-bold font-mono flex items-center gap-1 min-w-0 ${
+              totalPnl >= 0 ? 'text-mudra-green' : 'text-mudra-red'
+            }`}
+            title={`${totalPnl >= 0 ? '+' : '-'}🪙${Math.abs(totalPnl).toLocaleString('en-IN')}`}
+          >
+            <span className="shrink-0">{totalPnl >= 0 ? '+' : '-'}</span>
+            <MudraIcon className="w-4 h-4 shrink-0" />
+            <span className="truncate">{formatCurrency(Math.abs(totalPnl))}</span>
           </div>
-          <div className={`text-xs font-mono font-semibold ${totalPnl >= 0 ? 'text-mudra-green' : 'text-mudra-red'}`}>
+          <div className={`text-xs font-mono font-semibold truncate ${totalPnl >= 0 ? 'text-mudra-green' : 'text-mudra-red'}`}>
             {totalPnl >= 0 ? '+' : ''}{totalPnlPct.toFixed(2)}%
           </div>
         </div>
@@ -355,89 +410,259 @@ const PortfolioPage = () => {
 
       {/* Stock Holdings Section */}
       <div className="card mb-8">
-        <h2 className="font-bold text-white mb-4 flex items-center justify-between">
-          <span>📈 Equity Holdings ({activeHoldings.length})</span>
-          <Link to="/market" className="text-xs text-mudra-accent hover:underline">Trade More Stocks →</Link>
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="font-bold text-white flex items-center gap-2">
+              <span>📈 Equity Holdings</span>
+              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-mudra-accent/20 text-mudra-accent border border-mudra-accent/30">
+                {activeHoldings.length}
+              </span>
+            </h2>
+            <p className="text-xs text-mudra-muted mt-0.5 hidden sm:block">
+              Manage your stock positions, track live P&L, and configure automated Stop Loss / Take Profit targets.
+            </p>
+          </div>
+          <Link to="/market" className="text-xs text-mudra-accent hover:underline font-semibold flex items-center gap-1">
+            <span>Trade More Stocks</span> →
+          </Link>
+        </div>
+
         {holdingsWithPrices.length === 0 ? (
-          <div className="text-center py-8 text-mudra-muted">
-            <p className="mb-2">No stock holdings yet.</p>
-            <Link to="/market" className="btn-primary text-xs px-3 py-1.5">Browse 30 Stocks →</Link>
+          <div className="text-center py-10 text-mudra-muted">
+            <div className="text-3xl mb-2">📊</div>
+            <p className="font-medium text-white mb-1">No stock holdings yet</p>
+            <p className="text-xs text-mudra-muted mb-3 max-w-sm mx-auto">
+              You haven't invested in any companies yet. Explore the 30 Mudra stocks to build your portfolio!
+            </p>
+            <Link to="/market" className="btn-primary text-xs px-4 py-2 font-bold">Browse 30 Stocks →</Link>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-mudra-muted text-xs border-b border-mudra-border">
-                  <th className="text-left pb-3">Company</th>
-                  <th className="text-right pb-3">Qty</th>
-                  <th className="text-right pb-3">Avg Price</th>
-                  <th className="text-right pb-3">Current</th>
-                  <th className="text-right pb-3">Value</th>
-                  <th className="text-right pb-3">P&L</th>
-                  <th className="text-right pb-3">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {holdingsWithPrices.map((h) => (
-                  <tr key={h.ticker} className="border-b border-mudra-border/50 hover:bg-mudra-bg/50">
-                    <td className="py-3">
-                      <Link to={`/company/${h.ticker}`} className="font-semibold text-white hover:text-mudra-accent">
-                        {h.ticker}
-                      </Link>
-                      <div className="text-xs text-mudra-muted">{h.stock?.sector}</div>
-                    </td>
-                    <td className="text-right font-mono">{h.quantity}</td>
-                    <td className="text-right font-mono">
-                      <span className="flex items-center justify-end gap-0.5">
-                        <MudraIcon className="w-3 h-3" />{h.avgPrice?.toFixed(2)}
-                      </span>
-                    </td>
-                    <td className="text-right font-mono">
-                      <span className="flex items-center justify-end gap-0.5">
-                        <MudraIcon className="w-3 h-3" />{h.currentPrice?.toFixed(2)}
-                      </span>
-                    </td>
-                    <td className="text-right font-mono font-semibold text-white">
-                      <span className="flex items-center justify-end gap-0.5">
-                        <MudraIcon className="w-3 h-3" />{h.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                      </span>
-                    </td>
-                    <td className={`text-right font-mono ${h.pnl >= 0 ? 'text-mudra-green' : 'text-mudra-red'}`}>
-                      <div className="flex items-center justify-end gap-0.5">
-                        {h.pnl >= 0 ? '+' : '-'}
-                        <MudraIcon className="w-3 h-3" />
-                        {Math.abs(h.pnl).toFixed(0)}
-                      </div>
-                      <div className="text-xs">{h.pnlPct >= 0 ? '+' : ''}{h.pnlPct.toFixed(1)}%</div>
-                    </td>
-                    <td className="text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          onClick={() => {
-                            setSelectedStock(h.stock);
-                            setTradeActionType('sell');
-                          }}
-                          className="text-xs px-2.5 py-1 rounded-lg bg-red-950/40 border border-red-500/40 text-red-300 hover:bg-red-900/60 font-bold transition-all shadow-sm"
-                        >
-                          Sell
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSelectedStock(h.stock);
-                            setTradeActionType('buy');
-                          }}
-                          className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/60 font-bold transition-all shadow-sm"
-                        >
-                          Buy More
-                        </button>
-                      </div>
-                    </td>
+          <>
+            {/* ── Desktop / Tablet Table View (md:block) ── */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm min-w-[700px]">
+                <thead>
+                  <tr className="text-mudra-muted text-xs border-b border-mudra-border/80">
+                    <th className="text-left px-3.5 py-3">Company</th>
+                    <th className="text-right px-3.5 py-3">Qty</th>
+                    <th className="text-right px-3.5 py-3">Avg Buy Price</th>
+                    <th className="text-right px-3.5 py-3">Current Market</th>
+                    <th className="text-right px-3.5 py-3">Holding Value</th>
+                    <th className="text-right px-3.5 py-3">Total P&L</th>
+                    <th className="text-center px-3.5 py-3">Auto Limits</th>
+                    <th className="text-right px-3.5 py-3">Quick Trade</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {holdingsWithPrices.map((h) => {
+                    const limit = userLimits[h.ticker];
+                    return (
+                      <tr key={h.ticker} className="border-b border-mudra-border/50 hover:bg-mudra-bg/50 transition-colors">
+                        <td className="px-3.5 py-3.5">
+                          <Link to={`/company/${h.ticker}`} className="font-bold text-white hover:text-mudra-accent flex items-center gap-1.5">
+                            <span>{h.stock?.logo || '📈'}</span>
+                            <span>{h.ticker}</span>
+                          </Link>
+                          <div className="text-xs text-mudra-muted truncate max-w-[140px]">{h.stock?.name}</div>
+                        </td>
+                        <td className="text-right px-3.5 py-3.5 font-mono font-bold text-white">
+                          {h.quantity.toLocaleString('en-IN')}
+                        </td>
+                        <td className="text-right px-3.5 py-3.5 font-mono text-mudra-muted">
+                          <span className="flex items-center justify-end gap-0.5">
+                            <MudraIcon className="w-3 h-3" />
+                            {h.avgPrice?.toFixed(2)}
+                          </span>
+                        </td>
+                        <td className="text-right px-3.5 py-3.5 font-mono text-white font-semibold">
+                          <span className="flex items-center justify-end gap-0.5">
+                            <MudraIcon className="w-3 h-3" />
+                            {h.currentPrice?.toFixed(2)}
+                          </span>
+                        </td>
+                        <td className="text-right px-3.5 py-3.5 font-mono font-bold text-white">
+                          <span className="flex items-center justify-end gap-0.5">
+                            <MudraIcon className="w-3 h-3" />
+                            {h.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                          </span>
+                        </td>
+                        <td className={`text-right px-3.5 py-3.5 font-mono ${h.pnl >= 0 ? 'text-mudra-green' : 'text-mudra-red'}`}>
+                          <div className="flex items-center justify-end gap-0.5 font-bold">
+                            {h.pnl >= 0 ? '+' : '-'}
+                            <MudraIcon className="w-3 h-3" />
+                            {Math.abs(h.pnl).toFixed(0)}
+                          </div>
+                          <div className="text-[11px] font-semibold">{h.pnlPct >= 0 ? '+' : ''}{h.pnlPct.toFixed(1)}%</div>
+                        </td>
+                        <td className="text-center px-3.5 py-3.5">
+                          {limit?.stopLoss || limit?.takeProfit ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLimitModalStock(h);
+                                setEditSL(limit?.stopLoss ? limit.stopLoss.toString() : '');
+                                setEditTP(limit?.takeProfit ? limit.takeProfit.toString() : '');
+                              }}
+                              className="text-[10px] font-mono px-2 py-1 rounded bg-amber-950/40 border border-amber-500/40 text-amber-300 hover:bg-amber-900/60 transition-all font-bold block mx-auto text-left"
+                            >
+                              {limit.stopLoss && <div>🛑 SL: 🪙{limit.stopLoss}</div>}
+                              {limit.takeProfit && <div>🎯 TP: 🪙{limit.takeProfit}</div>}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLimitModalStock(h);
+                                setEditSL((h.currentPrice * 0.95).toFixed(2));
+                                setEditTP((h.currentPrice * 1.15).toFixed(2));
+                              }}
+                              className="text-[11px] text-mudra-muted hover:text-mudra-gold hover:underline font-semibold"
+                            >
+                              + Set SL/TP
+                            </button>
+                          )}
+                        </td>
+                        <td className="text-right px-3.5 py-3.5">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => {
+                                setSelectedStock(h.stock);
+                                setTradeActionType('sell');
+                              }}
+                              className="text-xs px-2.5 py-1 rounded-lg bg-red-950/40 border border-red-500/40 text-red-300 hover:bg-red-900/60 font-bold transition-all shadow-sm"
+                            >
+                              Sell
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedStock(h.stock);
+                                setTradeActionType('buy');
+                              }}
+                              className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/60 font-bold transition-all shadow-sm"
+                            >
+                              Buy More
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* ── Dedicated Mobile Card View (md:hidden) ── */}
+            <div className="block md:hidden space-y-3">
+              {holdingsWithPrices.map((h) => {
+                const limit = userLimits[h.ticker];
+                return (
+                  <div
+                    key={h.ticker}
+                    className="p-3.5 rounded-xl border border-mudra-border/70 bg-mudra-bg/90 space-y-3 shadow-sm"
+                  >
+                    {/* Header Row */}
+                    <div className="flex items-center justify-between border-b border-mudra-border/50 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">{h.stock?.logo || '📈'}</span>
+                        <div>
+                          <Link to={`/company/${h.ticker}`} className="font-bold text-white text-base hover:text-mudra-accent">
+                            {h.ticker}
+                          </Link>
+                          <div className="text-[11px] text-mudra-muted">{h.stock?.name}</div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-black font-mono text-white flex items-center justify-end gap-0.5">
+                          <MudraIcon className="w-3.5 h-3.5" />
+                          {h.currentPrice?.toFixed(2)}
+                        </div>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-mudra-card border border-mudra-border text-mudra-muted">
+                          {h.stock?.sector}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Stats Grid: Quantity, Avg Price, Current, Value */}
+                    <div className="grid grid-cols-2 gap-2 text-xs bg-mudra-card/50 p-2.5 rounded-lg border border-mudra-border/40">
+                      <div>
+                        <span className="text-[11px] text-mudra-muted block mb-0.5">Quantity Owned</span>
+                        <span className="font-mono font-bold text-white text-sm">{h.quantity.toLocaleString('en-IN')} shares</span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-mudra-muted block mb-0.5">Avg Buy Price</span>
+                        <span className="font-mono font-bold text-mudra-muted text-sm flex items-center gap-0.5">
+                          <MudraIcon className="w-3 h-3" />{h.avgPrice?.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="pt-1 border-t border-mudra-border/30">
+                        <span className="text-[11px] text-mudra-muted block mb-0.5">Holding Value</span>
+                        <span className="font-mono font-bold text-white text-sm flex items-center gap-0.5">
+                          <MudraIcon className="w-3 h-3" />{h.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                        </span>
+                      </div>
+                      <div className="pt-1 border-t border-mudra-border/30">
+                        <span className="text-[11px] text-mudra-muted block mb-0.5">Total P&L</span>
+                        <span className={`font-mono font-bold text-sm flex items-center gap-0.5 ${h.pnl >= 0 ? 'text-mudra-green' : 'text-mudra-red'}`}>
+                          <span>{h.pnl >= 0 ? '+' : '-'}</span>
+                          <MudraIcon className="w-3 h-3" />
+                          {Math.abs(h.pnl).toFixed(0)} ({h.pnlPct >= 0 ? '+' : ''}{h.pnlPct.toFixed(1)}%)
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Active Limits Row */}
+                    <div className="flex items-center justify-between text-xs pt-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-mudra-muted text-[11px]">Auto Limits:</span>
+                        {limit?.stopLoss || limit?.takeProfit ? (
+                          <div className="flex items-center gap-1 font-mono text-[10px] font-bold">
+                            {limit.stopLoss && <span className="text-red-400 bg-red-950/40 px-1.5 py-0.5 rounded border border-red-500/30">🛑 {limit.stopLoss}</span>}
+                            {limit.takeProfit && <span className="text-emerald-400 bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-500/30">🎯 {limit.takeProfit}</span>}
+                          </div>
+                        ) : (
+                          <span className="text-mudra-muted italic text-[11px]">None set</span>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLimitModalStock(h);
+                          setEditSL(limit?.stopLoss ? limit.stopLoss.toString() : (h.currentPrice * 0.95).toFixed(2));
+                          setEditTP(limit?.takeProfit ? limit.takeProfit.toString() : (h.currentPrice * 1.15).toFixed(2));
+                        }}
+                        className="text-xs text-mudra-accent font-bold hover:underline"
+                      >
+                        {limit?.stopLoss || limit?.takeProfit ? '⚙️ Edit SL/TP' : '🛡️ Set SL/TP'}
+                      </button>
+                    </div>
+
+                    {/* Mobile Action Buttons */}
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-mudra-border/40">
+                      <button
+                        onClick={() => {
+                          setSelectedStock(h.stock);
+                          setTradeActionType('sell');
+                        }}
+                        className="btn-red py-2 text-xs font-bold w-full rounded-lg"
+                      >
+                        ⚡ Sell Shares
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedStock(h.stock);
+                          setTradeActionType('buy');
+                        }}
+                        className="btn-green py-2 text-xs font-bold w-full rounded-lg"
+                      >
+                        + Buy More
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
 
@@ -453,21 +678,49 @@ const PortfolioPage = () => {
           </div>
           {activeSavings.length === 0 ? (
             <div className="text-center py-6 text-mudra-muted text-xs">
-              No active deposits. Earn up to +10% guaranteed returns in Savings.
+              No active deposits. Earn up to +15% guaranteed returns in Savings.
             </div>
           ) : (
             <div className="space-y-2">
-              {activeSavings.map((s) => (
-                <div key={s.id} className="bg-mudra-bg/70 p-2.5 rounded-lg border border-mudra-border text-xs flex justify-between items-center">
-                  <div>
-                    <div className="font-bold text-white font-mono">🪙{s.amount.toLocaleString('en-IN')}</div>
-                    <div className="text-[10px] text-mudra-green">+{(s.rate * 100).toFixed(0)}% return</div>
+              {activeSavings.map((s) => {
+                const isMatured = s.status === 'matured' || Date.now() >= new Date(s.maturesAt).getTime();
+                return (
+                  <div
+                    key={s.id}
+                    className={`p-2.5 rounded-lg border text-xs flex justify-between items-center transition-all ${
+                      isMatured ? 'bg-emerald-950/30 border-emerald-500/50' : 'bg-mudra-bg/70 border-mudra-border'
+                    }`}
+                  >
+                    <div>
+                      <div className="font-bold text-white font-mono flex items-center gap-1.5">
+                        <span>🪙{s.amount.toLocaleString('en-IN')}</span>
+                        {isMatured && (
+                          <span className="text-[10px] text-emerald-400 font-bold animate-pulse">
+                            (Matured!)
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-mudra-green">+{(s.rate * 100).toFixed(0)}% return</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono font-semibold text-mudra-gold">
+                        🪙{s.payout.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      </div>
+                      {isMatured && (
+                        <button
+                          onClick={async () => {
+                            await withdrawSavings({ userId, savingsId: s.id });
+                            refreshUserData();
+                          }}
+                          className="text-[10px] text-emerald-300 font-bold underline hover:text-white"
+                        >
+                          ⚡ Claim Now
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-right font-mono font-semibold text-mudra-gold">
-                    🪙{s.payout.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -545,6 +798,138 @@ const PortfolioPage = () => {
           defaultType={tradeActionType}
           onClose={() => setSelectedStock(null)}
         />
+      )}
+
+      {/* ── Set Limits Modal (Stop Loss & Take Profit) ── */}
+      {limitModalStock && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="card w-full max-w-sm animate-fadeIn space-y-4 border-mudra-gold/40">
+            <div className="flex items-center justify-between pb-2 border-b border-mudra-border/60">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-1.5">
+                  <span>🛡️</span> Auto Limits for {limitModalStock.ticker}
+                </h3>
+                <p className="text-xs text-mudra-muted">
+                  Auto-sells at target when market price is reached.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLimitModalStock(null)}
+                className="text-mudra-muted hover:text-white text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-mudra-bg p-2.5 rounded-lg border border-mudra-border flex justify-between text-xs">
+              <span className="text-mudra-muted">Current Market Price:</span>
+              <span className="font-mono font-bold text-white flex items-center gap-1">
+                <MudraIcon className="w-3.5 h-3.5" />
+                {limitModalStock.currentPrice?.toFixed(2)}
+              </span>
+            </div>
+
+            {/* Stop Loss Input */}
+            <div className="space-y-1 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-rose-400 font-semibold flex items-center gap-1">
+                  <span>🛑</span> Stop Loss Price
+                </span>
+                {editSL && (
+                  <span className="text-[10px] text-mudra-muted font-mono">
+                    {(((parseFloat(editSL) - limitModalStock.currentPrice) / limitModalStock.currentPrice) * 100).toFixed(1)}%
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-1.5 items-center">
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="e.g. 110.00"
+                  value={editSL}
+                  onChange={(e) => setEditSL(e.target.value)}
+                  className="input text-xs font-mono py-1.5 px-2.5 flex-1"
+                />
+                {[-5, -10, -15].map((pct) => (
+                  <button
+                    key={pct}
+                    type="button"
+                    onClick={() => setEditSL((limitModalStock.currentPrice * (1 + pct / 100)).toFixed(2))}
+                    className="text-[11px] px-2 py-1.5 rounded bg-red-950/40 border border-red-500/30 text-red-300 hover:bg-red-900/50 font-mono font-bold"
+                  >
+                    {pct}%
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-mudra-muted">Auto-sells if price drops to or below this level.</p>
+            </div>
+
+            {/* Take Profit Input */}
+            <div className="space-y-1 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                  <span>🎯</span> Take Profit Target
+                </span>
+                {editTP && (
+                  <span className="text-[10px] text-mudra-muted font-mono">
+                    +{(((parseFloat(editTP) - limitModalStock.currentPrice) / limitModalStock.currentPrice) * 100).toFixed(1)}%
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-1.5 items-center">
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="e.g. 150.00"
+                  value={editTP}
+                  onChange={(e) => setEditTP(e.target.value)}
+                  className="input text-xs font-mono py-1.5 px-2.5 flex-1"
+                />
+                {[10, 20, 30].map((pct) => (
+                  <button
+                    key={pct}
+                    type="button"
+                    onClick={() => setEditTP((limitModalStock.currentPrice * (1 + pct / 100)).toFixed(2))}
+                    className="text-[11px] px-2 py-1.5 rounded bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-900/50 font-mono font-bold"
+                  >
+                    +{pct}%
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-mudra-muted">Auto-sells if price rises to or above this target.</p>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-2 pt-2 border-t border-mudra-border/60">
+              <button
+                type="button"
+                onClick={() => {
+                  clearUserLimit(userId, limitModalStock.ticker);
+                  setLimitModalStock(null);
+                }}
+                className="btn-outline flex-1 py-2 text-xs text-mudra-muted hover:text-white"
+              >
+                Clear Limits
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setUserLimit(userId, limitModalStock.ticker, {
+                    stopLoss: editSL,
+                    takeProfit: editTP,
+                    quantity: limitModalStock.quantity,
+                    entryPrice: limitModalStock.currentPrice,
+                  });
+                  setLimitModalStock(null);
+                }}
+                className="btn-primary flex-1 py-2 text-xs font-bold"
+              >
+                Save Limits
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

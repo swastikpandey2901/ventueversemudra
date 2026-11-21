@@ -74,7 +74,7 @@ const CompanyPage = () => {
       </div>
 
       {/* Chart */}
-      <div className="card mb-6" style={{ height: 320 }}>
+      <div className="card mb-6 h-[380px] p-3 sm:p-4">
         <StockChart data={stock.priceHistory} startPrice={company?.startPrice} />
       </div>
 
