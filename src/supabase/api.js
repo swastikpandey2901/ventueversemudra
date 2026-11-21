@@ -40,8 +40,13 @@ export const subscribeStocks = (callback) => {
 };
 
 export const subscribeStock = (ticker, callback) => {
+  let cachedStock = null;
+
   getStock(ticker).then((data) => {
-    if (data) callback(data);
+    if (data) {
+      cachedStock = data;
+      callback(data);
+    }
   });
 
   const channel = supabase
@@ -55,7 +60,26 @@ export const subscribeStock = (ticker, callback) => {
         filter: `ticker=eq.${ticker}`,
       },
       (payload) => {
-        if (payload.new) callback(normalizeStock(payload.new));
+        if (payload.new) {
+          const normalized = normalizeStock(payload.new);
+          // If the payload from realtime does not include price_history (due to partial update or TOAST),
+          // preserve the existing cached priceHistory
+          if (!normalized.priceHistory || normalized.priceHistory.length === 0) {
+            if (cachedStock?.priceHistory?.length > 0) {
+              normalized.priceHistory = cachedStock.priceHistory;
+            } else {
+              // Re-fetch full stock to restore complete price history
+              getStock(ticker).then((fresh) => {
+                if (fresh) {
+                  cachedStock = fresh;
+                  callback(fresh);
+                }
+              });
+            }
+          }
+          cachedStock = normalized;
+          callback(normalized);
+        }
       }
     )
     .subscribe();

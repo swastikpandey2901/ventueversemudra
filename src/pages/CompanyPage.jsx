@@ -17,7 +17,20 @@ const CompanyPage = () => {
 
   useEffect(() => {
     if (!ticker) return;
-    const unsub = subscribeStock(ticker, setStock);
+    const unsub = subscribeStock(ticker, (incoming) => {
+      setStock((prev) => {
+        if (!prev) return incoming;
+        const priceHistory =
+          Array.isArray(incoming.priceHistory) && incoming.priceHistory.length > 0
+            ? incoming.priceHistory
+            : prev.priceHistory || [];
+        return {
+          ...prev,
+          ...incoming,
+          priceHistory,
+        };
+      });
+    });
     return unsub;
   }, [ticker]);
 

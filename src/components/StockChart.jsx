@@ -15,14 +15,31 @@ const StockChart = ({ data, startPrice }) => {
   const [hoveredCandle, setHoveredCandle] = useState(null);
   const containerRef = useRef(null);
 
+  // Ensure we always have at least 2 points so the chart never breaks or blanks out
+  const validData = useMemo(() => {
+    if (Array.isArray(data) && data.length >= 2) return data;
+    const basePrice = (Array.isArray(data) && data[0]?.price) || startPrice || 100;
+    const now = Date.now();
+    if (Array.isArray(data) && data.length === 1) {
+      return [
+        { price: startPrice || basePrice, timestamp: (data[0].timestamp || now) - 60000 },
+        data[0],
+      ];
+    }
+    return [
+      { price: basePrice, timestamp: now - 60000 },
+      { price: basePrice, timestamp: now },
+    ];
+  }, [data, startPrice]);
+
   // Normalize data into OHLC candles
   const candles = useMemo(() => {
-    if (!data || data.length === 0) return [];
+    if (!validData || validData.length === 0) return [];
 
-    return data.map((d, i) => {
+    return validData.map((d, i) => {
       const price = typeof d.price === 'number' ? parseFloat(d.price.toFixed(2)) : Number(d.price || 0);
       const prevPrice = i > 0
-        ? (typeof data[i - 1].price === 'number' ? parseFloat(data[i - 1].price.toFixed(2)) : Number(data[i - 1].price || price))
+        ? (typeof validData[i - 1].price === 'number' ? parseFloat(validData[i - 1].price.toFixed(2)) : Number(validData[i - 1].price || price))
         : (startPrice || price);
 
       const open = typeof d.open === 'number' ? d.open : prevPrice;
@@ -50,12 +67,12 @@ const StockChart = ({ data, startPrice }) => {
         isBullish,
       };
     });
-  }, [data, startPrice]);
+  }, [validData, startPrice]);
 
-  if (!data || data.length < 2) {
+  if (!candles || candles.length < 2) {
     return (
       <div className="flex items-center justify-center h-full text-mudra-muted text-sm">
-        Not enough price data yet — check back after the next market cycle tick.
+        Initializing chart data...
       </div>
     );
   }
