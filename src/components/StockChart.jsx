@@ -8,9 +8,10 @@ import {
   Tooltip,
   CartesianGrid,
   ReferenceLine,
+  ReferenceDot,
 } from 'recharts';
 
-const StockChart = ({ data, startPrice }) => {
+const StockChart = ({ data, startPrice, userTrades = [] }) => {
   const [chartType, setChartType] = useState('candles'); // 'area' | 'candles'
   const [hoveredCandle, setHoveredCandle] = useState(null);
   const containerRef = useRef(null);
@@ -69,6 +70,31 @@ const StockChart = ({ data, startPrice }) => {
     });
   }, [validData, startPrice]);
 
+  // Map user trades to nearest candle index for rendering markers
+  const tradeMarkers = useMemo(() => {
+    if (!userTrades || userTrades.length === 0 || !candles || candles.length === 0) return [];
+
+    return userTrades.map((trade) => {
+      // Find the candle whose timestamp is closest to this trade's timestamp
+      let bestIdx = 0;
+      let bestDiff = Infinity;
+      candles.forEach((c, i) => {
+        const diff = Math.abs((c.timestamp || 0) - (trade.timestamp || 0));
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestIdx = i;
+        }
+      });
+      return {
+        ...trade,
+        candleIdx: bestIdx,
+        candleTime: candles[bestIdx]?.time || '',
+      };
+    });
+  }, [userTrades, candles]);
+
+  const [hoveredTrade, setHoveredTrade] = useState(null);
+
   if (!candles || candles.length < 2) {
     return (
       <div className="flex items-center justify-center h-full text-mudra-muted text-sm">
@@ -76,6 +102,26 @@ const StockChart = ({ data, startPrice }) => {
       </div>
     );
   }
+
+  // Enrich candles with trade marker data for Recharts area mode
+  const enrichedCandles = useMemo(() => {
+    if (!tradeMarkers || tradeMarkers.length === 0) return candles;
+    // Clone candles and attach buy/sell price at the matching candle index
+    const cloned = candles.map((c) => ({ ...c }));
+    tradeMarkers.forEach((tm) => {
+      if (tm.candleIdx >= 0 && tm.candleIdx < cloned.length) {
+        if (tm.type === 'buy') {
+          // Store buy price for rendering; if multiple buys on same candle, keep last
+          cloned[tm.candleIdx].buyMarkerPrice = tm.price;
+          cloned[tm.candleIdx].buyMarkerQty = (cloned[tm.candleIdx].buyMarkerQty || 0) + tm.quantity;
+        } else {
+          cloned[tm.candleIdx].sellMarkerPrice = tm.price;
+          cloned[tm.candleIdx].sellMarkerQty = (cloned[tm.candleIdx].sellMarkerQty || 0) + tm.quantity;
+        }
+      }
+    });
+    return cloned;
+  }, [candles, tradeMarkers]);
 
   // Common calculations
   const lastCandle = candles[candles.length - 1];
@@ -88,6 +134,13 @@ const StockChart = ({ data, startPrice }) => {
   if (startPrice) {
     allLows.push(startPrice);
     allHighs.push(startPrice);
+  }
+  // Include user trade prices in Y-axis range so markers are always visible
+  if (tradeMarkers && tradeMarkers.length > 0) {
+    tradeMarkers.forEach((tm) => {
+      allLows.push(tm.price);
+      allHighs.push(tm.price);
+    });
   }
   const minP = Math.min(...allLows);
   const maxP = Math.max(...allHighs);
@@ -189,7 +242,7 @@ const StockChart = ({ data, startPrice }) => {
         {chartType === 'area' ? (
           /* Recharts Line/Area Mode */
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={candles} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
+            <AreaChart data={enrichedCandles} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="fullGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor={themeColor} stopOpacity={0.25} />
@@ -219,7 +272,12 @@ const StockChart = ({ data, startPrice }) => {
                   borderRadius: 8,
                   fontSize: 12,
                 }}
-                formatter={(v) => [`🪙${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, 'Price']}
+                formatter={(v, name) => {
+                  if (name === 'Price') return [`🪙${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, 'Price'];
+                  if (name === 'Your Buy') return [`🪙${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, '🟠 Your Buy Price'];
+                  if (name === 'Your Sell') return [`🪙${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, '🔵 Your Sell Price'];
+                  return [`🪙${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, name];
+                }}
               />
               {startPrice && (
                 <ReferenceLine
@@ -237,6 +295,53 @@ const StockChart = ({ data, startPrice }) => {
                 fill="url(#fullGrad)"
                 dot={false}
                 isAnimationActive={false}
+                name="Price"
+              />
+              {/* Buy marker dots — orange filled circles at the buy price */}
+              <Area
+                type="monotone"
+                dataKey="buyMarkerPrice"
+                stroke="none"
+                fill="none"
+                dot={(props) => {
+                  const { cx, cy, payload } = props;
+                  if (!payload.buyMarkerPrice || !cx || !cy) return null;
+                  return (
+                    <g key={`buy-${cx}`}>
+                      <circle cx={cx} cy={cy} r={6} fill="#f59e0b" stroke="#ffffff" strokeWidth={1.5} opacity={0.95} />
+                      <text x={cx} y={cy - 10} textAnchor="middle" fill="#f59e0b" fontSize="9" fontWeight="bold" fontFamily="monospace">
+                        B ×{payload.buyMarkerQty}
+                      </text>
+                    </g>
+                  );
+                }}
+                activeDot={false}
+                isAnimationActive={false}
+                connectNulls={false}
+                name="Your Buy"
+              />
+              {/* Sell marker dots — blue filled circles at the sell price */}
+              <Area
+                type="monotone"
+                dataKey="sellMarkerPrice"
+                stroke="none"
+                fill="none"
+                dot={(props) => {
+                  const { cx, cy, payload } = props;
+                  if (!payload.sellMarkerPrice || !cx || !cy) return null;
+                  return (
+                    <g key={`sell-${cx}`}>
+                      <circle cx={cx} cy={cy} r={6} fill="#3b82f6" stroke="#ffffff" strokeWidth={1.5} opacity={0.95} />
+                      <text x={cx} y={cy - 10} textAnchor="middle" fill="#3b82f6" fontSize="9" fontWeight="bold" fontFamily="monospace">
+                        S ×{payload.sellMarkerQty}
+                      </text>
+                    </g>
+                  );
+                }}
+                activeDot={false}
+                isAnimationActive={false}
+                connectNulls={false}
+                name="Your Sell"
               />
             </AreaChart>
           </ResponsiveContainer>
@@ -365,6 +470,101 @@ const StockChart = ({ data, startPrice }) => {
                   </g>
                 );
               })}
+
+              {/* ── User Trade Markers (Buy = Orange ▲, Sell = Blue ▼) ── */}
+              {tradeMarkers.map((tm, tIdx) => {
+                // Map to displayCandles offset (displayCandles = candles.slice(-35))
+                const displayOffset = candles.length - displayCandles.length;
+                const displayIdx = tm.candleIdx - displayOffset;
+                if (displayIdx < 0 || displayIdx >= displayCandles.length) return null;
+
+                const cx = padLeft + displayIdx * candleGap + candleGap / 2;
+                const markerY = priceToY(tm.price);
+                const isBuy = tm.type === 'buy';
+                const markerColor = isBuy ? '#f59e0b' : '#3b82f6';
+                const isHoveredTrade = hoveredTrade === tIdx;
+
+                // Clamp markerY within chart bounds
+                const clampedY = Math.max(padTop + 4, Math.min(padTop + chartH - 4, markerY));
+
+                return (
+                  <g
+                    key={`trade-${tIdx}`}
+                    onMouseEnter={() => setHoveredTrade(tIdx)}
+                    onMouseLeave={() => setHoveredTrade(null)}
+                    className="cursor-pointer"
+                  >
+                    {/* Vertical dashed line from marker to candle area */}
+                    <line
+                      x1={cx}
+                      y1={clampedY - 8}
+                      x2={cx}
+                      y2={clampedY + 8}
+                      stroke={markerColor}
+                      strokeWidth="1.5"
+                      strokeDasharray="2 2"
+                      opacity={0.6}
+                    />
+
+                    {/* Triangle marker: ▲ for buy, ▼ for sell */}
+                    {isBuy ? (
+                      <polygon
+                        points={`${cx},${clampedY - 7} ${cx - 5},${clampedY + 2} ${cx + 5},${clampedY + 2}`}
+                        fill={markerColor}
+                        stroke="#fff"
+                        strokeWidth={isHoveredTrade ? 1.5 : 0.8}
+                        opacity={isHoveredTrade ? 1 : 0.9}
+                      />
+                    ) : (
+                      <polygon
+                        points={`${cx},${clampedY + 7} ${cx - 5},${clampedY - 2} ${cx + 5},${clampedY - 2}`}
+                        fill={markerColor}
+                        stroke="#fff"
+                        strokeWidth={isHoveredTrade ? 1.5 : 0.8}
+                        opacity={isHoveredTrade ? 1 : 0.9}
+                      />
+                    )}
+
+                    {/* Hover tooltip showing buy/sell details */}
+                    {isHoveredTrade && (
+                      <g>
+                        <rect
+                          x={cx - 55}
+                          y={clampedY - (isBuy ? 36 : -16)}
+                          width={110}
+                          height={28}
+                          fill="#0d1117"
+                          stroke={markerColor}
+                          strokeWidth="1.2"
+                          rx={4}
+                          opacity={0.95}
+                        />
+                        <text
+                          x={cx}
+                          y={clampedY - (isBuy ? 23 : -26)}
+                          textAnchor="middle"
+                          fill={markerColor}
+                          fontSize="9"
+                          fontWeight="bold"
+                          fontFamily="monospace"
+                        >
+                          {isBuy ? '🟠 BUY' : '🔵 SELL'} ×{tm.quantity} @ 🪙{tm.price.toFixed(2)}
+                        </text>
+                        <text
+                          x={cx}
+                          y={clampedY - (isBuy ? 12 : -37)}
+                          textAnchor="middle"
+                          fill="#94a3b8"
+                          fontSize="8"
+                          fontFamily="monospace"
+                        >
+                          Total: 🪙{tm.totalValue.toLocaleString('en-IN')}
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                );
+              })}
             </svg>
 
             {/* Quick floating helper banner */}
@@ -375,6 +575,16 @@ const StockChart = ({ data, startPrice }) => {
               <span className="flex items-center gap-1">
                 <span className="w-2 h-2 rounded-sm bg-rose-500 inline-block" /> Bearish (Close &lt; Open)
               </span>
+              {tradeMarkers.length > 0 && (
+                <>
+                  <span className="flex items-center gap-1">
+                    <span className="w-0 h-0 inline-block" style={{ borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderBottom: '6px solid #f59e0b' }} /> Your Buys
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-0 h-0 inline-block" style={{ borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderTop: '6px solid #3b82f6' }} /> Your Sells
+                  </span>
+                </>
+              )}
             </div>
           </div>
         )}

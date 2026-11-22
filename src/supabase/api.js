@@ -559,6 +559,25 @@ export const getUserTradeHistory = async (userId) => {
   return data;
 };
 
+// Get user's trades for a specific stock ticker (for chart buy/sell markers)
+export const getUserTradesForTicker = async (userId, ticker) => {
+  const { data, error } = await supabase
+    .from('trades')
+    .select('type, price, quantity, total_value, created_at')
+    .eq('user_id', userId)
+    .eq('ticker', ticker)
+    .order('created_at', { ascending: true });
+
+  if (error) return [];
+  return data.map((t) => ({
+    type: t.type,
+    price: Number(t.price),
+    quantity: Number(t.quantity),
+    totalValue: Number(t.total_value),
+    timestamp: new Date(t.created_at).getTime(),
+  }));
+};
+
 export const getUserDetailedPortfolio = async (userId) => {
   const [
     profileRes,

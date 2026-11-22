@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { subscribeStock } from '../supabase/api';
+import { subscribeStock, getUserTradesForTicker } from '../supabase/api';
 import { getCompany } from '../data/companies';
 import StockChart from '../components/StockChart';
 import TradeModal from '../components/TradeModal';
@@ -13,6 +13,7 @@ const CompanyPage = () => {
   const { user } = useAuth();
   const [stock, setStock] = useState(null);
   const [tradeOpen, setTradeOpen] = useState(false);
+  const [userTrades, setUserTrades] = useState([]);
   const company = getCompany(ticker);
 
   useEffect(() => {
@@ -33,6 +34,16 @@ const CompanyPage = () => {
     });
     return unsub;
   }, [ticker]);
+
+  // Fetch user's trades for this stock (for chart buy/sell markers)
+  useEffect(() => {
+    const userId = user?.id || user?.uid;
+    if (!userId || !ticker) {
+      setUserTrades([]);
+      return;
+    }
+    getUserTradesForTicker(userId, ticker).then(setUserTrades);
+  }, [user, ticker, tradeOpen]); // re-fetch when trade modal closes (tradeOpen toggles)
 
   if (!stock) {
     return (
@@ -88,7 +99,7 @@ const CompanyPage = () => {
 
       {/* Chart */}
       <div className="card mb-6 h-[380px] p-3 sm:p-4">
-        <StockChart data={stock.priceHistory} startPrice={company?.startPrice} />
+        <StockChart data={stock.priceHistory} startPrice={company?.startPrice} userTrades={userTrades} />
       </div>
 
       {/* Trade Button */}
