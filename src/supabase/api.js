@@ -3,6 +3,10 @@ import { supabase } from './client';
 const randId = () => Math.random().toString(36).substring(2, 7);
 
 // ─── STOCKS ───────────────────────────────────────────────────────────────────
+let cachedStocks = [];
+
+export const getCachedStocks = () => cachedStocks;
+
 export const getStock = async (ticker) => {
   const { data, error } = await supabase
     .from('stocks')
@@ -16,12 +20,27 @@ export const getStock = async (ticker) => {
 
 export const getAllStocks = async () => {
   const { data, error } = await supabase.from('stocks').select('*');
-  if (error) return [];
-  return data.map(normalizeStock);
+  if (error) return cachedStocks.length > 0 ? cachedStocks : [];
+  const normalized = data.map(normalizeStock);
+  cachedStocks = normalized;
+  return normalized;
 };
 
 export const subscribeStocks = (callback) => {
-  getAllStocks().then(callback);
+  // If we already have cached stocks, invoke immediately to prevent blank screen flash on page switch
+  if (cachedStocks.length > 0) {
+    try {
+      callback(cachedStocks);
+    } catch (e) {
+      console.error('Error invoking cached stocks callback:', e);
+    }
+  }
+
+  getAllStocks().then((fresh) => {
+    if (fresh && fresh.length > 0) {
+      callback(fresh);
+    }
+  });
 
   const channel = supabase
     .channel(`stocks-realtime-${randId()}`)
@@ -29,7 +48,9 @@ export const subscribeStocks = (callback) => {
       'postgres_changes',
       { event: '*', schema: 'public', table: 'stocks' },
       () => {
-        getAllStocks().then(callback);
+        getAllStocks().then((fresh) => {
+          if (fresh && fresh.length > 0) callback(fresh);
+        });
       }
     )
     .subscribe();

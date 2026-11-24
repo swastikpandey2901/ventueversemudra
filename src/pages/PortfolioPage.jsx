@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   subscribeHoldings,
   subscribeStocks,
+  getCachedStocks,
   subscribeSavings,
   subscribeCommodities,
   subscribeCommodityHoldings,
@@ -32,7 +33,14 @@ const formatCurrency = (val) => {
 const PortfolioPage = () => {
   const { user, userData, refreshUserData } = useAuth();
   const [holdings, setHoldings] = useState([]);
-  const [stocks, setStocks] = useState({});
+  const [stocks, setStocks] = useState(() => {
+    const cached = getCachedStocks();
+    const map = {};
+    cached.forEach((s) => {
+      map[s.ticker] = s;
+    });
+    return map;
+  });
   const [selectedStock, setSelectedStock] = useState(null);
   const [tradeActionType, setTradeActionType] = useState('buy');
   const [liveUserData, setLiveUserData] = useState(null);

@@ -1,18 +1,22 @@
 import { useEffect, useState } from 'react';
-import { subscribeStocks } from '../supabase/api';
+import { subscribeStocks, getCachedStocks } from '../supabase/api';
 import CompanyCard from '../components/CompanyCard';
 import { SECTORS } from '../data/companies';
 
 const MarketPage = () => {
-  const [stocks, setStocks] = useState([]);
+  const [stocks, setStocks] = useState(() => getCachedStocks());
+  const [loading, setLoading] = useState(() => getCachedStocks().length === 0);
   const [sector, setSector] = useState('All');
   const [search, setSearch] = useState('');
   const [lastUpdate, setLastUpdate] = useState(null);
 
   useEffect(() => {
     const unsub = subscribeStocks((data) => {
-      setStocks(data);
-      setLastUpdate(new Date());
+      if (Array.isArray(data) && data.length > 0) {
+        setStocks(data);
+        setLoading(false);
+        setLastUpdate(new Date());
+      }
     });
     return unsub;
   }, []);
@@ -114,10 +118,16 @@ const MarketPage = () => {
       </div>
 
       {/* Company Grid */}
-      {stocks.length === 0 ? (
+      {loading && stocks.length === 0 ? (
+        <div className="text-center py-24 text-mudra-muted">
+          <div className="w-8 h-8 border-2 border-mudra-gold border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-sm font-medium text-white/80">Loading live market data...</p>
+          <p className="text-xs text-mudra-muted mt-1">Connecting to trading arena</p>
+        </div>
+      ) : stocks.length === 0 ? (
         <div className="text-center py-20 text-mudra-muted">
           <div className="text-4xl mb-3">📊</div>
-          <p>Market data loading... Admin needs to seed stocks first.</p>
+          <p className="text-sm">No companies found matching your search.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
