@@ -42,20 +42,25 @@ export const subscribeStocks = (callback) => {
     }
   });
 
+  let debounceTimer = null;
   const channel = supabase
     .channel(`stocks-realtime-${randId()}`)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'stocks' },
       () => {
-        getAllStocks().then((fresh) => {
-          if (fresh && fresh.length > 0) callback(fresh);
-        });
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          getAllStocks().then((fresh) => {
+            if (fresh && fresh.length > 0) callback(fresh);
+          });
+        }, 300);
       }
     )
     .subscribe();
 
   return () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
     supabase.removeChannel(channel);
   };
 };
@@ -761,46 +766,25 @@ export const getUserDetailedPortfolio = async (userId) => {
 export const subscribeLeaderboard = (callback) => {
   getLeaderboard().then(callback);
 
+  let debounceTimer = null;
+  const scheduleUpdate = () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      getLeaderboard().then(callback);
+    }, 450);
+  };
+
   const channel = supabase
     .channel(`leaderboard-realtime-${randId()}`)
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'trades' },
-      () => {
-        getLeaderboard().then(callback);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'stocks' },
-      () => {
-        getLeaderboard().then(callback);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'savings' },
-      () => {
-        getLeaderboard().then(callback);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'commodities' },
-      () => {
-        getLeaderboard().then(callback);
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'mutual_funds' },
-      () => {
-        getLeaderboard().then(callback);
-      }
-    )
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, scheduleUpdate)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'stocks' }, scheduleUpdate)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'savings' }, scheduleUpdate)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'commodities' }, scheduleUpdate)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'mutual_funds' }, scheduleUpdate)
     .subscribe();
 
   return () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
     supabase.removeChannel(channel);
   };
 };

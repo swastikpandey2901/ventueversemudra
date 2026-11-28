@@ -6,7 +6,7 @@ export const registerUser = async () => {
 };
 
 export const loginWithMudraCredentials = async (identifier, password) => {
-  const verified = verifyCredentials(identifier, password);
+  const verified = await verifyCredentials(identifier, password);
   if (!verified) {
     throw new Error('Access Denied. Only authorized credentials (MUDRA001–MUDRA200, TRIAL001–TRIAL050, or Admin) are permitted.');
   }
